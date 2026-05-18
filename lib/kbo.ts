@@ -63,10 +63,37 @@ function normalizeStatus(code: string | undefined): LiveStatus {
 export type LiveGame = Game & {
   /** 라이브 상태 — UI 의 '경기 전 / 경기 중 / 종료 / 우천 취소' 분기 */
   status: LiveStatus;
+  /** 취소 사유 (가능한 경우만 추론) */
+  cancelReason: "RAIN" | "OTHER" | null;
   /** 선발 라인업 (미발표/파싱 실패 시 null) */
   homeLineup: LineupItem[] | null;
   awayLineup: LineupItem[] | null;
 };
+
+export type TodayFeedStatus = "NORMAL" | "MONDAY_OFF" | "RAIN_CANCELLED";
+
+export function isKboRegularOffDay(date: string): boolean {
+  const day = new Date(`${date}T00:00:00+09:00`).getDay();
+  return day === 1;
+}
+
+export function resolveTodayFeedStatus(date: string, games: LiveGame[]): TodayFeedStatus {
+  const hasRainCancelled = games.some((game) => game.cancelReason === "RAIN");
+  const allCancelled = games.length > 0 && games.every((game) => game.status === "CANCEL");
+  if (hasRainCancelled || allCancelled) return "RAIN_CANCELLED";
+  if (isKboRegularOffDay(date) || games.length === 0) return "MONDAY_OFF";
+  return "NORMAL";
+}
+
+export function resolveTodayFeedMessage(status: TodayFeedStatus): string | null {
+  if (status === "MONDAY_OFF") {
+    return "오늘 월요일이라 야구 없다... 무슨 낙으로 사냐 😭";
+  }
+  if (status === "RAIN_CANCELLED") {
+    return "하... 비 와서 오늘 경기 취소됨 🌧️ 투수 로테이션 개이득인가?";
+  }
+  return null;
+}
 
 export type LineupItem = {
   order: string;
@@ -120,6 +147,14 @@ type NaverScheduleGame = {
   savePitcherName?: string;
 };
 
+function inferCancelReason(raw: NaverScheduleGame): "RAIN" | "OTHER" | null {
+  const status = normalizeStatus(raw.statusCode);
+  if (status !== "CANCEL") return null;
+  const text = JSON.stringify(raw).toLowerCase();
+  if (text.includes("우천") || text.includes("rain")) return "RAIN";
+  return "OTHER";
+}
+
 function adaptNaverGame(raw: NaverScheduleGame, fallbackDate: string): LiveGame | null {
   const homeId = NAVER_TEAM_MAP[(raw.homeTeamCode ?? "").toUpperCase()];
   const awayId = NAVER_TEAM_MAP[(raw.awayTeamCode ?? "").toUpperCase()];
@@ -169,6 +204,7 @@ function adaptNaverGame(raw: NaverScheduleGame, fallbackDate: string): LiveGame 
     awayLineup: null,
     result,
     status,
+    cancelReason: inferCancelReason(raw),
   };
 }
 
@@ -456,6 +492,9 @@ async function enrichLineups(games: LiveGame[]): Promise<LiveGame[]> {
  */
 export async function fetchKboTodayGames(date?: string): Promise<LiveGame[]> {
   const target = date ?? todayKstDate();
+  if (isKboRegularOffDay(target)) {
+    return [];
+  }
   try {
     const games = await fetchKboGamesRange(target, target);
     const withStarters = await enrichStarters(games);
@@ -549,6 +588,7 @@ export async function fetchKboSchedule(today?: string): Promise<ScheduleBundle> 
     const stamp = (g: import("@/lib/games").Game): LiveGame => ({
       ...g,
       status: g.result ? "RESULT" : "BEFORE",
+      cancelReason: null,
       homeLineup: null,
       awayLineup: null,
     });

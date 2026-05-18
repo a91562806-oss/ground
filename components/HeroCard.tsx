@@ -6,7 +6,6 @@ import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useStat
 import { AnimatePresence, motion } from "framer-motion";
 import { CloudRain, User } from "lucide-react";
 import { findTeam, heroLeftEpithetLabel, type Team } from "@/lib/teams";
-import { TODAY_GAMES } from "@/lib/games";
 import {
   getKboTeamThemeByTeamId,
   pickSlogan,
@@ -46,14 +45,12 @@ type Props = {
 };
 
 function getTodayMatch(team: Team, liveGames?: LiveGame[] | null) {
-  // 1순위: 라이브 KBO 데이터에 오늘 경기가 있으면 그쪽 사용 (점수/상태 포함)
-  // 2순위: 정적 더미 TODAY_GAMES 폴백 (시즌 데이터 부재 시)
+  // 라이브 KBO 데이터에 오늘 경기가 있으면 그쪽만 사용.
+  // 월요일/휴식일엔 "경기 없음" 상태를 정직하게 보여준다.
   const liveGame =
     liveGames?.find((g) => g.awayId === team.id || g.homeId === team.id) ?? null;
-  const game = liveGame ?? TODAY_GAMES.find(
-    (g) => g.awayId === team.id || g.homeId === team.id
-  );
-  if (!game) return null;
+  if (!liveGame) return null;
+  const game = liveGame;
   const isHome = game.homeId === team.id;
   const homeTeam = findTeam(game.homeId);
   const awayTeam = findTeam(game.awayId);
@@ -205,6 +202,14 @@ export default function HeroCard({ team }: Props) {
         : lines.join(" ");
 
   const dateLabel = formatMatchDate(match?.game.date);
+  const feedStatus = live?.status ?? "NORMAL";
+  const feedMessage =
+    live?.message ??
+    (feedStatus === "MONDAY_OFF"
+      ? "오늘 월요일이라 야구 없다... 무슨 낙으로 사냐 😭"
+      : feedStatus === "RAIN_CANCELLED"
+        ? "하... 비 와서 오늘 경기 취소됨 🌧️ 투수 로테이션 개이득인가?"
+        : null);
 
   const gameStartMs = useMemo(() => {
     if (!match?.game.date || !match.game.time) return null;
@@ -601,6 +606,17 @@ export default function HeroCard({ team }: Props) {
             >
               {sloganOneLine}
             </motion.p>
+            {feedMessage ? (
+              <motion.p
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5, ease, delay: 0.2 }}
+                className="mt-4 px-2 text-[14px] font-semibold leading-relaxed"
+                style={{ color: themedText(0.86) }}
+              >
+                {feedMessage}
+              </motion.p>
+            ) : null}
           </div>
         </motion.div>
       )}
@@ -817,6 +833,14 @@ export default function HeroCard({ team }: Props) {
                 </>
               )}
             </p>
+            {feedStatus === "RAIN_CANCELLED" && feedMessage ? (
+              <p
+                className="mt-3 px-2 text-[13px] font-semibold leading-relaxed"
+                style={{ color: themedText(0.8) }}
+              >
+                {feedMessage}
+              </p>
+            ) : null}
             {venueUnderDate.primary ? (
               <div className="mt-2.5 space-y-1">
                 <p

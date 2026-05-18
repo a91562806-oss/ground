@@ -6,7 +6,7 @@ import {
   fetchMockScoreSnapshotByTick,
 } from "@/lib/scoreMock";
 import { findTeam } from "@/lib/teams";
-import { todayKstDate } from "@/lib/kbo";
+import { isKboRegularOffDay, todayKstDate } from "@/lib/kbo";
 import { buildBiasedScoreCopy, computePulseState } from "@/lib/pushTemplate";
 import { generateScorePushCopy } from "@/lib/pushLlm";
 import { finishCronRun, startCronRun } from "@/lib/cronRunLogger";
@@ -281,6 +281,12 @@ async function fetchLiveScoreSnapshot(): Promise<LiveScoreGame[]> {
     .filter((g): g is LiveScoreGame => Boolean(g));
 }
 
+function dayRangeKst(date: string): { start: Date; end: Date } {
+  const start = new Date(`${date}T00:00:00+09:00`);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return { start, end };
+}
+
 export async function GET(req: Request) {
   const url = new URL(req.url);
   if (!isAuthorized(req, url)) {
@@ -288,11 +294,15 @@ export async function GET(req: Request) {
   }
 
   const fastMode = isFastMode(url);
+  const targetDate = todayKstDate();
+  const isOffDay = isKboRegularOffDay(targetDate);
   const tickRaw = url.searchParams.get("tick");
   const triggerSource = url.searchParams.get("source") ?? "unknown";
   const runId = await startCronRun("check-score", {
     fastMode,
     tickRaw,
+    targetDate,
+    isOffDay,
     triggerSource,
   });
 
@@ -308,6 +318,41 @@ export async function GET(req: Request) {
   let snapshot: LiveScoreGame[] = [];
 
   try {
+    if (isOffDay && (tickRaw == null || tickRaw === "")) {
+      const { start, end } = dayRangeKst(targetDate);
+      const cleared = await prisma.game.deleteMany({
+        where: {
+          gameDate: {
+            gte: start,
+            lt: end,
+          },
+        },
+      });
+      const summary = {
+        fastMode,
+        checked,
+        changed,
+        llmCalls,
+        pushSent,
+        disabled,
+        inboxCreated,
+        errors,
+        failedGameIds,
+        snapshotCount: 0,
+        fetchError,
+        triggerSource,
+        targetDate,
+        skipped: "MONDAY_OFF",
+        clearedGames: cleared.count,
+      };
+      await finishCronRun({
+        id: runId,
+        status: "success",
+        summary,
+      });
+      return NextResponse.json({ ok: true, runId, ...summary });
+    }
+
     try {
       snapshot =
         tickRaw != null && tickRaw !== ""
@@ -326,6 +371,42 @@ export async function GET(req: Request) {
       errors += 1;
       console.error("[check-score] snapshot fetch failed", error);
       snapshot = [];
+    }
+
+    if (snapshot.length === 0 || snapshot.every((game) => game.status === "CANCEL")) {
+      const { start, end } = dayRangeKst(targetDate);
+      const cleared = await prisma.game.deleteMany({
+        where: {
+          gameDate: {
+            gte: start,
+            lt: end,
+          },
+        },
+      });
+      const summary = {
+        fastMode,
+        checked,
+        changed,
+        llmCalls,
+        pushSent,
+        disabled,
+        inboxCreated,
+        errors,
+        failedGameIds,
+        snapshotCount: snapshot.length,
+        fetchError,
+        triggerSource,
+        targetDate,
+        skipped: snapshot.length === 0 ? "NO_GAMES" : "ALL_CANCELLED",
+        clearedGames: cleared.count,
+      };
+      await finishCronRun({
+        id: runId,
+        status: fetchError ? "partial" : "success",
+        summary,
+        error: fetchError,
+      });
+      return NextResponse.json({ ok: !fetchError, runId, ...summary });
     }
 
     for (const game of snapshot) {
@@ -692,6 +773,7 @@ export async function GET(req: Request) {
       snapshotCount: snapshot.length,
       fetchError,
       triggerSource,
+      targetDate,
     };
     await finishCronRun({
       id: runId,

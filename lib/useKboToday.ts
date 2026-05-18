@@ -2,10 +2,13 @@
 
 import { useEffect, useState } from "react";
 import type { LiveGame } from "@/lib/kbo";
+import type { TodayFeedStatus } from "@/lib/kbo";
 import type { StandingRow } from "@/config/standings";
 
 export type KboTodayPayload = {
   date: string;
+  status: TodayFeedStatus;
+  message: string | null;
   games: LiveGame[];
   standings: StandingRow[];
 };
