@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { sendWebPush } from "@/lib/webPushServer";
 import { findTeam } from "@/lib/teams";
+import { fetchKboTodayGames, starterLabel, todayKstDate } from "@/lib/kbo";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,6 +33,12 @@ type SubscriptionTopics = {
 
 type NotifyKind = "preGame" | "gameEnd";
 type GameResultTone = "win" | "loss" | "draw";
+type PreGameDetail = {
+  opponentShort: string;
+  time: string;
+  stadium: string;
+  starter: string;
+};
 
 function isNotifyEnabled(topics: unknown, kind: NotifyKind): boolean {
   if (!topics || typeof topics !== "object") return false;
@@ -63,6 +70,14 @@ function buildPreGameCopy(teamId: string, dateSeed: string) {
   return {
     title: `${team.short} 곧 경기 시작! ⚾️`,
     body,
+  };
+}
+
+function buildPreGameCopyWithDetails(teamId: string, detail: PreGameDetail) {
+  const team = findTeam(teamId);
+  return {
+    title: `${team.short} vs ${detail.opponentShort} · ${detail.time}`,
+    body: `${detail.stadium} · 선발 ${detail.starter}. 오늘도 찢어버리자 🔥`,
   };
 }
 
@@ -183,6 +198,31 @@ async function generateNotifyCopyWithLlm(input: {
   }
 }
 
+async function resolvePreGameDetailsByTeam(): Promise<Map<string, PreGameDetail>> {
+  const date = todayKstDate();
+  const games = await fetchKboTodayGames(date);
+  const map = new Map<string, PreGameDetail>();
+  for (const game of games) {
+    const home = findTeam(game.homeId);
+    const away = findTeam(game.awayId);
+    const homeDetail: PreGameDetail = {
+      opponentShort: away.short,
+      time: game.time,
+      stadium: game.stadium,
+      starter: starterLabel(game.homePitcher),
+    };
+    const awayDetail: PreGameDetail = {
+      opponentShort: home.short,
+      time: game.time,
+      stadium: game.stadium,
+      starter: starterLabel(game.awayPitcher),
+    };
+    map.set(game.homeId, homeDetail);
+    map.set(game.awayId, awayDetail);
+  }
+  return map;
+}
+
 function isAuthorized(req: Request): boolean {
   const secret = process.env.CRON_SECRET;
   if (!secret) return true; // 로컬 개발 편의
@@ -265,13 +305,78 @@ export async function GET(req: Request) {
     });
   }
 
+  const hasManualTitle = Boolean(url.searchParams.get("title")?.trim());
+  const hasManualBody = Boolean(url.searchParams.get("body")?.trim());
+  const preGameDetails =
+    kind === "preGame" && !hasManualTitle && !hasManualBody
+      ? await resolvePreGameDetailsByTeam()
+      : new Map<string, PreGameDetail>();
+
+  const copyCache = new Map<string, { title: string; body: string }>();
+  const resolveCopyForSub = async (sub: ActiveSubscription) => {
+    const favorite = sub.user.favoriteTeam ?? teamId;
+    if (!favorite) return { title, body };
+    const cacheKey = `${kind}:${favorite}:${resultTone}:${myScore}:${oppScore}:${dateSeed}`;
+    const cached = copyCache.get(cacheKey);
+    if (cached) return cached;
+
+    let copy: { title: string; body: string };
+    if (kind === "preGame" && !hasManualTitle && !hasManualBody) {
+      const detail = preGameDetails.get(favorite);
+      if (detail) {
+        copy = buildPreGameCopyWithDetails(favorite, detail);
+      } else {
+        copy = buildPreGameCopy(favorite, dateSeed);
+      }
+    } else if (!hasManualTitle && !hasManualBody) {
+      copy =
+        favorite === teamId
+          ? generated
+          : await generateNotifyCopyWithLlm({
+              kind,
+              teamId: favorite,
+              fallbackTitle:
+                kind === "gameEnd"
+                  ? buildGameEndCopy(
+                      favorite,
+                      resultTone,
+                      Number.isFinite(myScore) ? myScore : undefined,
+                      Number.isFinite(oppScore) ? oppScore : undefined
+                    ).title
+                  : buildPreGameCopy(favorite, dateSeed).title,
+              fallbackBody:
+                kind === "gameEnd"
+                  ? buildGameEndCopy(
+                      favorite,
+                      resultTone,
+                      Number.isFinite(myScore) ? myScore : undefined,
+                      Number.isFinite(oppScore) ? oppScore : undefined
+                    ).body
+                  : buildPreGameCopy(favorite, dateSeed).body,
+              resultTone,
+              myScore: Number.isFinite(myScore) ? myScore : undefined,
+              oppScore: Number.isFinite(oppScore) ? oppScore : undefined,
+            });
+    } else {
+      copy = { title, body };
+    }
+
+    copyCache.set(cacheKey, copy);
+    return copy;
+  };
+
   const targetUserIds = Array.from(new Set(filteredSubs.map((s) => s.userId)));
+  const userCopyMap = new Map<string, { title: string; body: string }>();
+  for (const sub of filteredSubs) {
+    if (userCopyMap.has(sub.userId)) continue;
+    userCopyMap.set(sub.userId, await resolveCopyForSub(sub));
+  }
   await prisma.notification.createMany({
     data: targetUserIds.map((userId) => ({
       userId,
       type: kind === "preGame" ? "PREDICTION_REMINDER" : "GAME_RESULT",
-      title,
-      body,
+      title: userCopyMap.get(userId)?.title ?? title,
+      body: userCopyMap.get(userId)?.body ?? body,
       deeplinkUrl: "/today",
       sentAt: new Date(),
     })),
@@ -280,6 +385,7 @@ export async function GET(req: Request) {
   let sent = 0;
   let disabled = 0;
   for (const sub of filteredSubs) {
+    const copy = await resolveCopyForSub(sub);
     const result = await sendWebPush(
       {
         endpoint: sub.endpoint,
@@ -287,8 +393,8 @@ export async function GET(req: Request) {
         auth: sub.auth,
       },
       {
-        title,
-        body,
+        title: copy.title,
+        body: copy.body,
         url: "/today",
         ...(sub.user.favoriteTeam ?? teamId
           ? { teamId: sub.user.favoriteTeam ?? teamId ?? undefined }
