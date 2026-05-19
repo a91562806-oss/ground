@@ -10,10 +10,12 @@ import { isKboRegularOffDay, todayKstDate } from "@/lib/kbo";
 import { buildBiasedScoreCopy, computePulseState } from "@/lib/pushTemplate";
 import { generateScorePushCopy } from "@/lib/pushLlm";
 import { finishCronRun, startCronRun } from "@/lib/cronRunLogger";
+import { fetchPostGameFacts, generatePostGameReport } from "@/lib/postGameReport";
+import { shouldSkipCronInAlpha } from "@/lib/appEnv";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 10;
 
 type GameEndTone = "win" | "loss" | "draw";
 type LiveScoreGame = {
@@ -28,15 +30,41 @@ type LiveScoreGame = {
 
 type SubscriptionTopics = {
   score?: boolean;
+  livePitcherChange?: boolean;
+  liveStrikeout?: boolean;
   postGame?: boolean;
   gameEnd?: boolean;
 };
 
 type JsonObject = Record<string, unknown>;
 
+type ActiveSubscription = {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  userId: string;
+  topics: unknown;
+  updatedAt: Date;
+  user: {
+    favoriteTeam: string | null;
+  };
+};
+
 function isScoreAlertEnabled(topics: unknown): boolean {
   if (!topics || typeof topics !== "object") return false;
   return Boolean((topics as SubscriptionTopics).score);
+}
+
+function isLivePitcherChangeEnabled(topics: unknown): boolean {
+  if (!topics || typeof topics !== "object") return true;
+  const value = (topics as SubscriptionTopics).livePitcherChange;
+  return value === undefined ? true : Boolean(value);
+}
+
+function isLiveStrikeoutEnabled(topics: unknown): boolean {
+  if (!topics || typeof topics !== "object") return true;
+  const value = (topics as SubscriptionTopics).liveStrikeout;
+  return value === undefined ? true : Boolean(value);
 }
 
 function isGameEndAlertEnabled(topics: unknown): boolean {
@@ -190,7 +218,7 @@ async function fetchLatestPlayText(gameId: string): Promise<string | null> {
   ];
   for (const endpoint of endpoints) {
     try {
-      const res = await fetchJsonWithTimeout(endpoint, 300);
+      const res = await fetchJsonWithTimeout(endpoint, 900);
       if (!res.ok) continue;
       const json = await res.json();
       const text = pickLatestPlayText(json);
@@ -239,6 +267,47 @@ async function mapWithConcurrency<T, R>(
   const workerCount = Math.max(1, Math.min(concurrency, items.length));
   await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
   return results;
+}
+
+function uniqueLatestSubByUser(subs: ActiveSubscription[]): ActiveSubscription[] {
+  const map = new Map<string, ActiveSubscription>();
+  for (const sub of subs) {
+    const prev = map.get(sub.userId);
+    if (!prev || sub.updatedAt.getTime() > prev.updatedAt.getTime()) {
+      map.set(sub.userId, sub);
+    }
+  }
+  return [...map.values()];
+}
+
+async function fetchRecentBodiesByTeam(teamIds: string[]): Promise<Map<string, string[]>> {
+  const unique = [...new Set(teamIds.filter(Boolean))];
+  const out = new Map<string, string[]>();
+  if (unique.length === 0) return out;
+  await Promise.all(
+    unique.map(async (teamId) => {
+      const rows = await prisma.notification.findMany({
+        where: {
+          type: "SCORE_UPDATE",
+          createdAt: { gte: new Date(Date.now() - 6 * 60 * 60 * 1000) },
+          payload: {
+            path: ["teamId"],
+            equals: teamId,
+          },
+        },
+        orderBy: { createdAt: "desc" },
+        take: 12,
+        select: { body: true },
+      });
+      out.set(
+        teamId,
+        rows
+          .map((row) => row.body)
+          .filter((text): text is string => typeof text === "string" && text.trim().length > 0)
+      );
+    })
+  );
+  return out;
 }
 
 async function fetchLiveScoreSnapshot(): Promise<LiveScoreGame[]> {
@@ -311,10 +380,107 @@ function dayRangeKst(date: string): { start: Date; end: Date } {
   return { start, end };
 }
 
+type LiveEventKind = "pitcherChange" | "strikeout";
+type LiveEventTone = "for" | "against" | "neutral";
+
+function detectHalfInning(latestPlayText: string): "초" | "말" | null {
+  const match = latestPlayText.match(/\d{1,2}회(초|말)/);
+  if (!match) return null;
+  return match[1] === "초" || match[1] === "말" ? match[1] : null;
+}
+
+function detectLiveEventKinds(latestPlayText: string): LiveEventKind[] {
+  const normalized = latestPlayText.replace(/\s+/g, " ").trim();
+  const kinds: LiveEventKind[] = [];
+  if (/투수\s*교체|교체\s*[:：]?\s*투수|마운드에\s*오른|마운드에\s*오릅니다/.test(normalized)) {
+    kinds.push("pitcherChange");
+  }
+  if (/(헛스윙|루킹)?\s*삼진|탈삼진|\bK{1,3}\b/i.test(normalized)) {
+    kinds.push("strikeout");
+  }
+  return kinds;
+}
+
+function resolveLiveEventToneByFan(
+  latestPlayText: string,
+  game: LiveScoreGame,
+  favoriteTeam: string
+): LiveEventTone {
+  const half = detectHalfInning(latestPlayText);
+  if (half) {
+    const defendingTeam = half === "초" ? game.homeTeam : game.awayTeam;
+    if (favoriteTeam === defendingTeam) return "for";
+    const battingTeam = defendingTeam === game.homeTeam ? game.awayTeam : game.homeTeam;
+    if (favoriteTeam === battingTeam) return "against";
+  }
+
+  const text = latestPlayText.toLowerCase();
+  const myShort = findTeam(favoriteTeam).short.toLowerCase();
+  const oppTeamId = favoriteTeam === game.homeTeam ? game.awayTeam : game.homeTeam;
+  const oppShort = findTeam(oppTeamId).short.toLowerCase();
+  if (text.includes(myShort) && !text.includes(oppShort)) return "for";
+  if (!text.includes(myShort) && text.includes(oppShort)) return "against";
+  return "neutral";
+}
+
+function buildLiveEventCopy(input: {
+  kind: LiveEventKind;
+  tone: LiveEventTone;
+  favoriteTeam: string;
+  opponentTeam: string;
+  latestPlayText: string;
+}): { title: string; body: string } {
+  const myTeam = findTeam(input.favoriteTeam);
+  const oppTeam = findTeam(input.opponentTeam);
+  const body = input.latestPlayText.replace(/\s+/g, " ").trim().slice(0, 80);
+
+  if (input.kind === "pitcherChange") {
+    if (input.tone === "for") {
+      return {
+        title: `🔄 ${myTeam.short} 투수 교체`,
+        body: `[경기중] ${body}`,
+      };
+    }
+    if (input.tone === "neutral") {
+      return {
+        title: `🔄 경기중 투수 교체`,
+        body: `[경기중] ${body}`,
+      };
+    }
+    return {
+      title: `🔄 ${oppTeam.short} 투수 교체`,
+      body: `[경기중] ${body}`,
+    };
+  }
+
+  if (input.tone === "for") {
+    return {
+      title: `🧊 ${myTeam.short} 탈삼진`,
+      body: `[경기중] ${body}`,
+    };
+  }
+  if (input.tone === "neutral") {
+    return {
+      title: `🧊 경기중 탈삼진`,
+      body: `[경기중] ${body}`,
+    };
+  }
+  return {
+    title: `😬 ${oppTeam.short} 탈삼진`,
+    body: `[경기중] ${body}`,
+  };
+}
+
 export async function GET(req: Request) {
   const url = new URL(req.url);
   if (!isAuthorized(req, url)) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  if (shouldSkipCronInAlpha(url)) {
+    return NextResponse.json({
+      ok: true,
+      skipped: "ALPHA_ENV_CRON_DISABLED",
+    });
   }
 
   const fastMode = isFastMode(url);
@@ -337,6 +503,9 @@ export async function GET(req: Request) {
   let disabled = 0;
   let inboxCreated = 0;
   let llmCalls = 0;
+  let reportQueued = 0;
+  let reportReady = 0;
+  let reportFailed = 0;
   let errors = 0;
   const failedGameIds: string[] = [];
   let fetchError: string | null = null;
@@ -350,6 +519,9 @@ export async function GET(req: Request) {
         checked,
         changed,
         llmCalls,
+        reportQueued,
+        reportReady,
+        reportFailed,
         pushSent,
         disabled,
         inboxCreated,
@@ -385,6 +557,9 @@ export async function GET(req: Request) {
         checked,
         changed,
         llmCalls,
+        reportQueued,
+        reportReady,
+        reportFailed,
         pushSent,
         disabled,
         inboxCreated,
@@ -440,6 +615,9 @@ export async function GET(req: Request) {
         checked,
         changed,
         llmCalls,
+        reportQueued,
+        reportReady,
+        reportFailed,
         pushSent,
         disabled,
         inboxCreated,
@@ -494,14 +672,54 @@ export async function GET(req: Request) {
         if (!previous) continue;
         const homeDelta = game.homeScore - previous.homeScore;
         const awayDelta = game.awayScore - previous.awayScore;
-        if (homeDelta <= 0 && awayDelta <= 0) continue;
+        const scoreChanged = homeDelta > 0 || awayDelta > 0;
+        const justEnded = previous.status !== "RESULT" && game.status === "RESULT";
+        const shouldCheckLiveEvents = game.status === "LIVE";
+        if (!scoreChanged && !justEnded && !shouldCheckLiveEvents) continue;
 
-        changed += 1;
         const latestPlayText = fastMode
           ? `스코어 변동: ${game.homeTeam} ${game.homeScore}:${game.awayScore} ${game.awayTeam}`
           : (await fetchLatestPlayText(game.externalId)) ??
             `스코어 변동: ${game.homeTeam} ${game.homeScore}:${game.awayScore} ${game.awayTeam}`;
-        const activeSubs = await prisma.pushSubscription.findMany({
+
+        const detectedLiveKinds = shouldCheckLiveEvents ? detectLiveEventKinds(latestPlayText) : [];
+        const liveKindsToSend = detectedLiveKinds.filter((kind) => kind === "pitcherChange" || kind === "strikeout");
+        const shouldProcessLiveEvents = liveKindsToSend.length > 0;
+
+        if (scoreChanged) {
+          const scoreDedupeKey = `score:${game.externalId}:${game.homeScore}:${game.awayScore}`;
+          const alreadyNotified = await prisma.notification.findFirst({
+            where: {
+              type: "SCORE_UPDATE",
+              createdAt: { gte: new Date(Date.now() - 12 * 60 * 60 * 1000) },
+              payload: {
+                path: ["dedupeKey"],
+                equals: scoreDedupeKey,
+              },
+            },
+            select: { id: true },
+          });
+          if (alreadyNotified) {
+            continue;
+          }
+          const scoreAlertKey = `${game.homeScore}:${game.awayScore}`;
+          const dedupe = await prisma.game.updateMany({
+            where: {
+              id: updated.id,
+              OR: [{ lastScoreAlertKey: null }, { lastScoreAlertKey: { not: scoreAlertKey } }],
+            },
+            data: {
+              lastScoreAlertKey: scoreAlertKey,
+              lastScoreAlertAt: new Date(),
+            },
+          });
+          if (dedupe.count === 0) {
+            continue;
+          }
+          changed += 1;
+        }
+
+        const rawSubs = await prisma.pushSubscription.findMany({
           where: {
             enabled: true,
             user: {
@@ -516,6 +734,7 @@ export async function GET(req: Request) {
             auth: true,
             userId: true,
             topics: true,
+            updatedAt: true,
             user: {
               select: {
                 favoriteTeam: true,
@@ -523,96 +742,109 @@ export async function GET(req: Request) {
             },
           },
         });
-
-        const scoreTargets = activeSubs
-          .filter((sub) => isScoreAlertEnabled(sub.topics))
-          .map((sub) => ({ sub }));
+        const activeSubs = uniqueLatestSubByUser(rawSubs as ActiveSubscription[]);
 
         const scoreCopyCache = new Map<string, Promise<{ title: string; body: string }>>();
-        const scoreResults = await mapWithConcurrency(scoreTargets, 12, async ({ sub }) => {
-          const favoriteTeam = sub.user.favoriteTeam;
-          if (!favoriteTeam) return null;
+        const recentBodiesByTeam = scoreChanged
+          ? await fetchRecentBodiesByTeam(
+              activeSubs
+                .map((sub) => sub.user.favoriteTeam)
+                .filter((teamId): teamId is string => Boolean(teamId))
+            )
+          : new Map<string, string[]>();
+        const scoreResults = scoreChanged
+          ? await mapWithConcurrency(
+              activeSubs.filter((sub) => isScoreAlertEnabled(sub.topics)).map((sub) => ({ sub })),
+              12,
+              async ({ sub }) => {
+                const favoriteTeam = sub.user.favoriteTeam;
+                if (!favoriteTeam) return null;
 
-          let tone: "for" | "against" | null = null;
-          if (favoriteTeam === game.homeTeam) {
-            if (homeDelta > 0) tone = "for";
-            else if (awayDelta > 0) tone = "against";
-          } else if (favoriteTeam === game.awayTeam) {
-            if (awayDelta > 0) tone = "for";
-            else if (homeDelta > 0) tone = "against";
-          }
-          if (!tone) return null;
+                let tone: "for" | "against" | null = null;
+                if (favoriteTeam === game.homeTeam) {
+                  if (homeDelta > 0) tone = "for";
+                  else if (awayDelta > 0) tone = "against";
+                } else if (favoriteTeam === game.awayTeam) {
+                  if (awayDelta > 0) tone = "for";
+                  else if (homeDelta > 0) tone = "against";
+                }
+                if (!tone) return null;
 
-          const isHomeFan = favoriteTeam === game.homeTeam;
-          const prevMyScore = isHomeFan ? previous.homeScore : previous.awayScore;
-          const prevOppScore = isHomeFan ? previous.awayScore : previous.homeScore;
-          const myScore = isHomeFan ? game.homeScore : game.awayScore;
-          const oppScore = isHomeFan ? game.awayScore : game.homeScore;
-          const state = computePulseState(prevMyScore, prevOppScore, myScore, oppScore);
-          const myTeam = findTeam(favoriteTeam);
-          const oppTeam = findTeam(isHomeFan ? game.awayTeam : game.homeTeam);
-          const fallback = buildBiasedScoreCopy({
-            teamShort: myTeam.short,
-            oppShort: oppTeam.short,
-            myScore,
-            oppScore,
-            tone,
-            state,
-          });
+                const isHomeFan = favoriteTeam === game.homeTeam;
+                const prevMyScore = isHomeFan ? previous.homeScore : previous.awayScore;
+                const prevOppScore = isHomeFan ? previous.awayScore : previous.homeScore;
+                const myScore = isHomeFan ? game.homeScore : game.awayScore;
+                const oppScore = isHomeFan ? game.awayScore : game.homeScore;
+                const state = computePulseState(prevMyScore, prevOppScore, myScore, oppScore);
+                const myTeam = findTeam(favoriteTeam);
+                const oppTeam = findTeam(isHomeFan ? game.awayTeam : game.homeTeam);
+                const fallback = buildBiasedScoreCopy({
+                  teamShort: myTeam.short,
+                  oppShort: oppTeam.short,
+                  myScore,
+                  oppScore,
+                  tone,
+                  state,
+                });
 
-          const cacheKey = `${favoriteTeam}:${myScore}:${oppScore}:${tone}:${latestPlayText}`;
-          let copyPromise = scoreCopyCache.get(cacheKey);
-          if (!copyPromise) {
-            if (fastMode) {
-              copyPromise = Promise.resolve(fallback);
-            } else {
-              llmCalls += 1;
-              copyPromise = generateScorePushCopy({
-                favoriteTeam,
-                opponentTeam: isHomeFan ? game.awayTeam : game.homeTeam,
-                myScore,
-                oppScore,
-                latestPlayText,
-                fallbackTitle: fallback.title,
-                fallbackBody: fallback.body,
-              });
-            }
-            scoreCopyCache.set(cacheKey, copyPromise);
-          }
-          const aiCopy = await copyPromise;
-          const push = await sendWebPush(
-            {
-              endpoint: sub.endpoint,
-              p256dh: sub.p256dh,
-              auth: sub.auth,
-            },
-            {
-              title: aiCopy.title,
-              body: aiCopy.body,
-              url: "/today",
-              latestPlayText,
-              teamId: favoriteTeam,
-            },
-            { favoriteTeam, origin: url.origin }
-          );
+                const cacheKey = `${favoriteTeam}:${myScore}:${oppScore}:${tone}:${latestPlayText}`;
+                let copyPromise = scoreCopyCache.get(cacheKey);
+                if (!copyPromise) {
+                  if (fastMode) {
+                    copyPromise = Promise.resolve(fallback);
+                  } else {
+                    llmCalls += 1;
+                    copyPromise = generateScorePushCopy({
+                      favoriteTeam,
+                      opponentTeam: isHomeFan ? game.awayTeam : game.homeTeam,
+                      myScore,
+                      oppScore,
+                      latestPlayText,
+                      fallbackTitle: fallback.title,
+                      fallbackBody: fallback.body,
+                      recentBodies: recentBodiesByTeam.get(favoriteTeam) ?? [],
+                    });
+                  }
+                  scoreCopyCache.set(cacheKey, copyPromise);
+                }
+                const aiCopy = await copyPromise;
+                const push = await sendWebPush(
+                  {
+                    endpoint: sub.endpoint,
+                    p256dh: sub.p256dh,
+                    auth: sub.auth,
+                  },
+                  {
+                    title: aiCopy.title,
+                    body: aiCopy.body,
+                    url: "/today",
+                    latestPlayText,
+                    teamId: favoriteTeam,
+                  },
+                  { favoriteTeam, origin: url.origin }
+                );
 
-          return {
-            sub,
-            tone,
-            aiCopy,
-            push,
-            payload: {
-              gameId: updated.id,
-              externalId: game.externalId,
-              homeTeam: game.homeTeam,
-              awayTeam: game.awayTeam,
-              homeScore: game.homeScore,
-              awayScore: game.awayScore,
-              tone,
-              latestPlayText,
-            } as Prisma.InputJsonValue,
-          };
-        });
+                return {
+                  sub,
+                  tone,
+                  aiCopy,
+                  push,
+                  payload: {
+                    dedupeKey: `score:${game.externalId}:${game.homeScore}:${game.awayScore}`,
+                    gameId: updated.id,
+                    externalId: game.externalId,
+                    homeTeam: game.homeTeam,
+                    awayTeam: game.awayTeam,
+                    homeScore: game.homeScore,
+                    awayScore: game.awayScore,
+                    teamId: favoriteTeam,
+                    tone,
+                    latestPlayText,
+                  } as Prisma.InputJsonValue,
+                };
+              }
+            )
+          : [];
 
         const disableTargets = scoreResults
           .filter(
@@ -671,7 +903,139 @@ export async function GET(req: Request) {
           inboxCreated += result.count;
         }
 
-        const justEnded = previous.status !== "RESULT" && game.status === "RESULT";
+        if (shouldProcessLiveEvents) {
+          for (const kind of liveKindsToSend) {
+            const alreadyNotified = await prisma.notification.findFirst({
+              where: {
+                type: "SCORE_UPDATE",
+                createdAt: { gte: new Date(Date.now() - 20 * 60 * 1000) },
+                payload: {
+                  path: ["externalId"],
+                  equals: game.externalId,
+                },
+                AND: [
+                  {
+                    payload: {
+                      path: ["eventKind"],
+                      equals: kind,
+                    },
+                  },
+                  {
+                    payload: {
+                      path: ["latestPlayText"],
+                      equals: latestPlayText,
+                    },
+                  },
+                ],
+              },
+              select: { id: true },
+            });
+            if (alreadyNotified) continue;
+
+            const liveTargets = activeSubs.filter((sub) =>
+              kind === "pitcherChange"
+                ? isLivePitcherChangeEnabled(sub.topics)
+                : isLiveStrikeoutEnabled(sub.topics)
+            );
+
+            const liveResults = await mapWithConcurrency(liveTargets, 12, async (sub) => {
+              const favoriteTeam = sub.user.favoriteTeam;
+              if (!favoriteTeam) return null;
+              const tone = resolveLiveEventToneByFan(latestPlayText, game, favoriteTeam);
+              const opponentTeam = favoriteTeam === game.homeTeam ? game.awayTeam : game.homeTeam;
+              const copy = buildLiveEventCopy({
+                kind,
+                tone,
+                favoriteTeam,
+                opponentTeam,
+                latestPlayText,
+              });
+              const push = await sendWebPush(
+                {
+                  endpoint: sub.endpoint,
+                  p256dh: sub.p256dh,
+                  auth: sub.auth,
+                },
+                {
+                  title: copy.title,
+                  body: copy.body,
+                  url: "/today",
+                  latestPlayText,
+                  teamId: favoriteTeam,
+                },
+                { favoriteTeam, origin: url.origin }
+              );
+              return { sub, push, copy, tone };
+            });
+
+            const liveDisableTargets = liveResults
+              .filter(
+                (r) =>
+                  r &&
+                  (r.push.statusCode === 401 ||
+                    r.push.statusCode === 403 ||
+                    r.push.statusCode === 404 ||
+                    r.push.statusCode === 410)
+              )
+              .map((r) => r!.sub);
+            if (liveDisableTargets.length > 0) {
+              const disableResults = await mapWithConcurrency(liveDisableTargets, 8, (sub) =>
+                prisma.pushSubscription.updateMany({
+                  where: {
+                    userId: sub.userId,
+                    endpoint: sub.endpoint,
+                    enabled: true,
+                  },
+                  data: { enabled: false },
+                })
+              );
+              disabled += disableResults.reduce((acc, row) => acc + row.count, 0);
+            }
+
+            const liveInboxRows: Array<{
+              userId: string;
+              title: string;
+              body: string;
+              deeplinkUrl: string;
+              sentAt: Date;
+              type: "SCORE_UPDATE";
+              payload: Prisma.InputJsonValue;
+            }> = [];
+            const liveInboxKey = new Set<string>();
+            for (const row of liveResults) {
+              if (!row) continue;
+              if (row.push.ok) pushSent += 1;
+              const key = `${row.sub.userId}:${row.copy.title}:${row.copy.body}`;
+              if (liveInboxKey.has(key)) continue;
+              liveInboxKey.add(key);
+              liveInboxRows.push({
+                userId: row.sub.userId,
+                title: row.copy.title,
+                body: row.copy.body,
+                deeplinkUrl: "/today",
+                sentAt: new Date(),
+                type: "SCORE_UPDATE",
+                payload: {
+                  gameId: updated.id,
+                  externalId: game.externalId,
+                  homeTeam: game.homeTeam,
+                  awayTeam: game.awayTeam,
+                  homeScore: game.homeScore,
+                  awayScore: game.awayScore,
+                  teamId: row.sub.user.favoriteTeam,
+                  latestPlayText,
+                  eventKind: kind,
+                  tone: row.tone,
+                } as Prisma.InputJsonValue,
+              });
+            }
+            if (liveInboxRows.length > 0) {
+              const result = await prisma.notification.createMany({ data: liveInboxRows });
+              inboxCreated += result.count;
+            }
+          }
+        }
+
         if (!justEnded) continue;
 
         const endSubs = await prisma.pushSubscription.findMany({
@@ -689,6 +1053,7 @@ export async function GET(req: Request) {
             auth: true,
             userId: true,
             topics: true,
+            updatedAt: true,
             user: {
               select: {
                 favoriteTeam: true,
@@ -696,9 +1061,10 @@ export async function GET(req: Request) {
             },
           },
         });
+        const uniqueEndSubs = uniqueLatestSubByUser(endSubs as ActiveSubscription[]);
 
         const endResults = await mapWithConcurrency(
-          endSubs.filter((sub) => isGameEndAlertEnabled(sub.topics)),
+          uniqueEndSubs.filter((sub) => isGameEndAlertEnabled(sub.topics)),
           12,
           async (sub) => {
             const favoriteTeam = sub.user.favoriteTeam;
@@ -805,6 +1171,94 @@ export async function GET(req: Request) {
           const result = await prisma.notification.createMany({ data: endInboxRows });
           inboxCreated += result.count;
         }
+
+        const reportTargets = [game.homeTeam, game.awayTeam];
+        for (const teamId of reportTargets) {
+          const opponentTeamId = teamId === game.homeTeam ? game.awayTeam : game.homeTeam;
+          const isHomeFan = teamId === game.homeTeam;
+          const myScore = isHomeFan ? game.homeScore : game.awayScore;
+          const oppScore = isHomeFan ? game.awayScore : game.homeScore;
+          const tone: "win" | "loss" | "draw" =
+            myScore === oppScore ? "draw" : myScore > oppScore ? "win" : "loss";
+
+          const existing = await prisma.postGameReport.findUnique({
+            where: {
+              externalId_teamId: {
+                externalId: game.externalId,
+                teamId,
+              },
+            },
+            select: { status: true },
+          });
+          if (existing?.status === "READY") continue;
+          reportQueued += 1;
+
+          await prisma.postGameReport.upsert({
+            where: {
+              externalId_teamId: {
+                externalId: game.externalId,
+                teamId,
+              },
+            },
+            update: {
+              status: "GENERATING",
+              gameDate: game.gameDate,
+              error: null,
+            },
+            create: {
+              externalId: game.externalId,
+              teamId,
+              gameDate: game.gameDate,
+              status: "GENERATING",
+            },
+          });
+
+          try {
+            const facts = await fetchPostGameFacts({
+              externalId: game.externalId,
+              teamId,
+              opponentTeamId,
+              myScore,
+              oppScore,
+            });
+            const report = await generatePostGameReport({
+              teamId,
+              tone,
+              facts,
+            });
+            await prisma.postGameReport.update({
+              where: {
+                externalId_teamId: {
+                  externalId: game.externalId,
+                  teamId,
+                },
+              },
+              data: {
+                status: "READY",
+                title: report.title,
+                bodyLines: report.lines as Prisma.InputJsonValue,
+                facts: facts as unknown as Prisma.InputJsonValue,
+                generatedAt: new Date(),
+                error: null,
+              },
+            });
+            reportReady += 1;
+          } catch (error) {
+            await prisma.postGameReport.update({
+              where: {
+                externalId_teamId: {
+                  externalId: game.externalId,
+                  teamId,
+                },
+              },
+              data: {
+                status: "FAILED",
+                error: (error as Error).message.slice(0, 400),
+              },
+            });
+            reportFailed += 1;
+          }
+        }
       } catch (error) {
         errors += 1;
         failedGameIds.push(game.externalId);
@@ -817,6 +1271,9 @@ export async function GET(req: Request) {
       checked,
       changed,
       llmCalls,
+      reportQueued,
+      reportReady,
+      reportFailed,
       pushSent,
       disabled,
       inboxCreated,
@@ -849,6 +1306,9 @@ export async function GET(req: Request) {
         checked,
         changed,
         llmCalls,
+        reportQueued,
+        reportReady,
+        reportFailed,
         pushSent,
         disabled,
         inboxCreated,
@@ -866,6 +1326,9 @@ export async function GET(req: Request) {
         checked,
         changed,
         llmCalls,
+        reportQueued,
+        reportReady,
+        reportFailed,
         pushSent,
         disabled,
         inboxCreated,

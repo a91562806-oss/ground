@@ -132,6 +132,18 @@ function formatCountdownHms(totalSeconds: number): string {
   return `${pad2(h)}:${pad2(m)}:${pad2(s)}`;
 }
 
+function formatVisibleUntilKst(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const kst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
+  const month = kst.getUTCMonth() + 1;
+  const day = kst.getUTCDate();
+  const hh = String(kst.getUTCHours()).padStart(2, "0");
+  const mm = String(kst.getUTCMinutes()).padStart(2, "0");
+  return `${month}/${day} ${hh}:${mm}까지`;
+}
+
 function hexToRgb(hex: string): [number, number, number] | null {
   const normalized = hex.trim().replace("#", "");
   if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return null;
@@ -167,6 +179,7 @@ type FloatingChat = {
 };
 
 const MAX_FLOATING_CHATS = 50;
+const PREVIEW_DISMISS_KEY = "ground-pregame-preview-dismiss";
 
 export default function HeroCard({ team }: Props) {
   // ── 라이브 KBO 데이터 (60s 폴링, 실패 시 폴백) ──
@@ -236,6 +249,45 @@ export default function HeroCard({ team }: Props) {
     showHeroCountdown && gameStartMs != null
       ? formatCountdownHms(Math.floor((gameStartMs - nowMs) / 1000))
       : null;
+  const pregamePreview = live?.pregamePreview ?? null;
+  const previewDateKey = live?.date ?? "";
+  const previewDismissKey = `${team.id}:${previewDateKey}`;
+  const [isPregamePreviewDismissed, setIsPregamePreviewDismissed] = useState(false);
+  const showPregamePreview =
+    Boolean(match) &&
+    live?.gamePhase === "PRE" &&
+    Boolean(pregamePreview?.active) &&
+    !isPregamePreviewDismissed;
+  const postGameReport = live?.postGameReport ?? null;
+  const showPostGameReport = Boolean(postGameReport?.active);
+  const postGameVisibleUntilLabel = formatVisibleUntilKst(postGameReport?.visibleUntil);
+
+  useEffect(() => {
+    if (!previewDateKey) return;
+    try {
+      const raw = localStorage.getItem(PREVIEW_DISMISS_KEY);
+      if (!raw) {
+        setIsPregamePreviewDismissed(false);
+        return;
+      }
+      const parsed = JSON.parse(raw) as Record<string, boolean>;
+      setIsPregamePreviewDismissed(Boolean(parsed[previewDismissKey]));
+    } catch {
+      setIsPregamePreviewDismissed(false);
+    }
+  }, [previewDateKey, previewDismissKey]);
+
+  function dismissPregamePreviewForToday() {
+    try {
+      const raw = localStorage.getItem(PREVIEW_DISMISS_KEY);
+      const parsed = raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
+      parsed[previewDismissKey] = true;
+      localStorage.setItem(PREVIEW_DISMISS_KEY, JSON.stringify(parsed));
+    } catch {
+      // ignore
+    }
+    setIsPregamePreviewDismissed(true);
+  }
 
   const [chatInput, setChatInput] = useState("");
   const [floatingChats, setFloatingChats] = useState<FloatingChat[]>([]);
@@ -560,6 +612,86 @@ export default function HeroCard({ team }: Props) {
       >
         <NotificationBell accent={accentColor} iconColor={themedText(0.98)} />
       </motion.div>
+
+      {showPregamePreview && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35, ease, delay: 0.24 }}
+          className="absolute inset-x-4 top-20 z-[35] mx-auto w-[min(94vw,680px)] rounded-2xl border border-[#ff7a1840] bg-[linear-gradient(135deg,rgba(255,93,26,0.24),rgba(50,8,2,0.52))] px-4 py-3 backdrop-blur-md"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-[12px] font-semibold tracking-[0.02em] text-white/95">
+              🔥 오늘의 매운맛 관전 포인트
+            </p>
+            <button
+              type="button"
+              onClick={dismissPregamePreviewForToday}
+              className="rounded-md border border-white/18 px-2 py-1 text-[10px] font-medium text-white/70 transition hover:bg-white/10 hover:text-white"
+            >
+              오늘 하루 접어두기
+            </button>
+          </div>
+          {pregamePreview?.status === "READY" && pregamePreview.lines.length > 0 ? (
+            <>
+              {pregamePreview.title ? (
+                <p className="mt-1 text-[13px] font-semibold leading-snug text-white/92">
+                  {pregamePreview.title}
+                </p>
+              ) : null}
+              <div className="mt-2 space-y-1.5">
+                {pregamePreview.lines.slice(0, 4).map((line, idx) => (
+                  <p key={`${idx}-${line}`} className="text-[12px] leading-relaxed text-white/82">
+                    {line}
+                  </p>
+                ))}
+              </div>
+            </>
+          ) : (
+            <p className="mt-2 text-[12px] leading-relaxed text-white/78">
+              프리뷰 생성 중... 경기 전 매운맛 리포트를 곧 보여줄게.
+            </p>
+          )}
+        </motion.div>
+      )}
+
+      {showPostGameReport && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35, ease, delay: 0.25 }}
+          className="absolute inset-x-4 top-20 z-[35] mx-auto w-[min(94vw,680px)] rounded-2xl border border-white/12 bg-black/46 px-4 py-3 backdrop-blur-md"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[10px] uppercase tracking-[0.2em] text-white/55">Postgame Report</p>
+            <p className="text-[10px] text-white/45">
+              {postGameVisibleUntilLabel ?? "익일 12:00까지"}
+            </p>
+          </div>
+          {postGameReport?.status === "READY" ? (
+            <>
+              <p className="mt-1.5 text-[14px] font-semibold leading-snug text-white/94">
+                {postGameReport.title ?? "🔥 [한줄평] 오늘 경기 매운맛 복기"}
+              </p>
+              <div className="mt-2 space-y-1.5">
+                {postGameReport.lines.slice(0, 4).map((line, idx) => (
+                  <p key={`${idx}-${line}`} className="text-[12px] leading-relaxed text-white/78">
+                    {line}
+                  </p>
+                ))}
+              </div>
+            </>
+          ) : postGameReport?.status === "FAILED" ? (
+            <p className="mt-1.5 text-[12px] leading-relaxed text-white/72">
+              리포트 생성에 실패했어요. 다음 갱신 주기에 다시 시도합니다.
+            </p>
+          ) : (
+            <p className="mt-1.5 text-[12px] leading-relaxed text-white/72">
+              경기 종료 분석 리포트 생성 중... 잠시만 기다려줘.
+            </p>
+          )}
+        </motion.div>
+      )}
 
       {/* ── 경기 없음: 하단 그라데이션 위 중앙 스택 (글래스 없음) ── */}
       {!match && (

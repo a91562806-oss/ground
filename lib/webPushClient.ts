@@ -8,6 +8,8 @@ export type PushTopics = {
   preGame: boolean;
   postGame: boolean;
   score: boolean;
+  livePitcherChange: boolean;
+  liveStrikeout: boolean;
 };
 
 export function getOrCreateNotifyUserId(): string {

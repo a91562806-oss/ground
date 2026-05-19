@@ -23,6 +23,8 @@ const DEFAULT_TOPICS: PushTopics = {
   preGame: true,
   postGame: true,
   score: true,
+  livePitcherChange: true,
+  liveStrikeout: true,
 };
 const NOTIF_PREFS_STORAGE_KEY = "ground-notif-prefs";
 

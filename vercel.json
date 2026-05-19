@@ -11,6 +11,10 @@
     {
       "path": "/api/cron/check-lineup",
       "schedule": "20 6 * * *"
+    },
+    {
+      "path": "/api/cron/pregame-preview",
+      "schedule": "30 8 * * 1-5"
     }
   ]
 }

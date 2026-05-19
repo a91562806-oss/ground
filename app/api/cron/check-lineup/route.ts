@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { findTeam } from "@/lib/teams";
 import { sendWebPush } from "@/lib/webPushServer";
 import { buildBiasedLineupCopy, computePulseState } from "@/lib/pushTemplate";
+import { shouldSkipCronInAlpha } from "@/lib/appEnv";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -66,6 +67,12 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   if (!isAuthorized(req, url)) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  if (shouldSkipCronInAlpha(url)) {
+    return NextResponse.json({
+      ok: true,
+      skipped: "ALPHA_ENV_CRON_DISABLED",
+    });
   }
   const dryRun = isDryRun(url);
 

@@ -38,6 +38,16 @@ npm run dev
 | `REPLICATE_MODEL_VERSION` | 기본 LoRA 모델 | `config/teams.ts`의 팀별 `modelId` 사용 |
 | `OPENWEATHER_API_KEY` | 구장 위치 날씨 조회 | `isRainy: false` (항상 맑음) |
 | `DATABASE_URL` | Prisma(PostgreSQL) 연결 문자열 | DB 기능 비활성 |
+| `APP_ENV` | 서버 실행 환경 (`production` / `alpha`) | 미설정 시 `development` |
+| `NEXT_PUBLIC_APP_ENV` | 클라이언트 표시 환경 (`alpha`면 상단 배지 노출) | 배지 미노출 |
+
+### Alpha 배포 운영 권장
+
+- `alpha` 브랜치를 별도 유지하고 Vercel Preview/별도 프로젝트로 고정 URL 운용
+- `APP_ENV=alpha`, `NEXT_PUBLIC_APP_ENV=alpha` 설정
+- `alpha` 환경에서는 크론 API가 기본적으로 실행되지 않음
+  - 대상: `/api/cron/check-score`, `/api/cron/check-lineup`, `/api/cron/notify`, `/api/cron/pregame-preview`
+  - 강제 테스트 시에만 `?force=1` 쿼리로 수동 호출
 
 ## Prisma (알림 시스템 1단계)
 

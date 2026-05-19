@@ -8,6 +8,7 @@ type GenerateScorePushInput = {
   latestPlayText: string;
   fallbackTitle: string;
   fallbackBody: string;
+  recentBodies?: string[];
 };
 
 type GenerateScorePushOptions = {
@@ -18,7 +19,7 @@ type GenerateScorePushOptions = {
 };
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
-const ANTHROPIC_MODEL = process.env.PUSH_LLM_MODEL ?? "claude-sonnet-4-6";
+const ANTHROPIC_MODEL = "claude-3-haiku-20240307";
 
 function compactText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
@@ -28,6 +29,50 @@ function clipForPush(text: string): string {
   const compact = compactText(text);
   if (compact.length <= 52) return compact;
   return `${compact.slice(0, 50)}..`;
+}
+
+function resolveScoreGap(input: GenerateScorePushInput): number {
+  return Math.abs(input.myScore - input.oppScore);
+}
+
+function resolveScoreGapTier(input: GenerateScorePushInput): "close" | "danger" | "garbage" {
+  const gap = resolveScoreGap(input);
+  if (gap <= 2) return "close";
+  if (gap <= 5) return "danger";
+  return "garbage";
+}
+
+function normalizeForSimilarity(text: string): string {
+  return compactText(text)
+    .replace(/^\[[^\]]+\]\s*/, "")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .toLowerCase()
+    .trim();
+}
+
+function calcTokenOverlapRatio(a: string, b: string): number {
+  const aSet = new Set(a.split(" ").filter((token) => token.length > 1));
+  const bSet = new Set(b.split(" ").filter((token) => token.length > 1));
+  if (aSet.size === 0 || bSet.size === 0) return 0;
+  let inter = 0;
+  for (const token of aSet) {
+    if (bSet.has(token)) inter += 1;
+  }
+  const union = aSet.size + bSet.size - inter;
+  return union <= 0 ? 0 : inter / union;
+}
+
+function isNearDuplicate(candidate: string, recentBodies: string[]): boolean {
+  const normalizedCandidate = normalizeForSimilarity(candidate);
+  if (!normalizedCandidate) return false;
+  return recentBodies.some((body) => {
+    const normalizedBody = normalizeForSimilarity(body);
+    if (!normalizedBody) return false;
+    if (normalizedBody === normalizedCandidate) return true;
+    const overlap = calcTokenOverlapRatio(normalizedCandidate, normalizedBody);
+    return overlap >= 0.68;
+  });
 }
 
 function extractInningTag(latestPlayText: string): string {
@@ -74,51 +119,175 @@ function enforceBaseballConsistency(text: string, input: GenerateScorePushInput)
   return normalized;
 }
 
-function buildSystemPrompt(favoriteTeam: string): string {
-  return `너는 생각할 시간이 없다. 무조건 30자 내외의 한 줄 문장으로 즉시 뱉어라. 인사말, 부연설명, 서론은 절대 금지하고 오직 푸시 알림 본문만 출력해.
+function extractEventHook(latestPlayText: string): string | null {
+  const cleaned = compactText(latestPlayText)
+    .replace(/\d{1,2}회(?:초|말)?/g, "")
+    .replace(/스코어\s*변동[:：]?\s*/g, "")
+    .replace(/[()]/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  if (!cleaned) return null;
+  if (cleaned.length <= 14) return cleaned;
+  return cleaned.slice(0, 14).trim();
+}
 
-너는 KBO 리그 ${favoriteTeam}의 30년 차 광팬이자, 세상에서 가장 편파적인 중계 캐스터야. 객관성, 중립성, 예의는 개나 줘버려. 오직 ${favoriteTeam}의 관점에서만 상황을 해석해.
+function buildVariedLeadLine(input: GenerateScorePushInput): string {
+  const myTeam = findTeam(input.favoriteTeam).short;
+  const oppTeam = findTeam(input.opponentTeam).short;
+  const gap = input.myScore - input.oppScore;
+  const eventHook = extractEventHook(input.latestPlayText);
+  if (eventHook) {
+    return `${myTeam} ${input.myScore}:${input.oppScore} ${oppTeam} (${eventHook}) 분위기 우리가 먹음🔥`;
+  }
+  if (gap >= 3) {
+    return `${myTeam} ${input.myScore}:${input.oppScore} ${oppTeam}. 점수 더 벌렸다, 쐐기 각이다🚀`;
+  }
+  return `${myTeam} ${input.myScore}:${input.oppScore} ${oppTeam}. 한 번 더 찌르면 끝이다🔥`;
+}
 
-득점/호수비 (선수 샤라웃): 세상을 다 가진 것처럼 환호해. '발생 이벤트'에 언급된 우리 선수의 이름을 반드시 부르며 신격화해. (예: 오스틴 홈런 -> '빛스틴 폼 미쳤다!!', 임찬규 삼진 -> '빛찬규 KKKKK!')
+function ensureCopyVariety(text: string, input: GenerateScorePushInput): string {
+  const normalized = compactText(text);
+  if (!/상대\s*멘탈\s*흔들린다/.test(normalized)) return normalized;
+  return buildVariedLeadLine(input);
+}
 
-실점/위기: 심판의 스트라이크존을 의심하거나, 운이 없었다고 탓하거나, '어차피 역전한다'며 미친 듯이 희망회로를 돌려.
+function enforceScoreGapTone(text: string, input: GenerateScorePushInput): string {
+  const normalized = compactText(text);
+  const tier = resolveScoreGapTier(input);
+  const trailing = input.myScore < input.oppScore;
+  if (!trailing) return normalized;
 
-상대 팀 비하 (은어 허용): 상대 팀을 정식 명칭으로 부르지 말고 칭찬도 절대 금지야. 야구팬들이 쓰는 찰지고 유쾌한 은어(예: 옆집, 쟤네, 꼴등팀, 아랫마을 등)를 섞어서 마음껏 깎아내려.
+  if (tier === "garbage") {
+    // 대참사 구간에서 "아직 안 끝났다" 류를 강제 차단한다.
+    if (
+      /아직|역전|할 수 있다|끝났다\s*아님|쫓아간다|해보자|집중하자/.test(normalized) ||
+      normalized.length > 40
+    ) {
+      const my = findTeam(input.favoriteTeam).short;
+      const opp = findTeam(input.opponentTeam).short;
+      const candidates = [
+        `${my} ${input.myScore}:${input.oppScore} ${opp}... 하.`,
+        `${input.myScore}:${input.oppScore} ㅋㅋ 오늘은 여기까지.`,
+        `........ 티비 껐다. 내일 보자.`,
+        `오늘 야구 안 합니다. 다들 귀가.`,
+      ] as const;
+      return candidates[(input.myScore + input.oppScore) % candidates.length];
+    }
+    return normalized;
+  }
 
-형식: 모바일 푸시 알림에 맞게 30~50자 내외로 아주 짧고 타격감 있게 작성해.
+  if (tier === "danger") {
+    // 3~5점 차에서는 분노/짜증 텐션을 우선한다.
+    if (/아직|침착|할 수 있다/.test(normalized)) {
+      return normalized
+        .replace(/아직/g, "")
+        .replace(/침착/g, "")
+        .replace(/할 수 있다/g, "빨리 정신 차려야 한다")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+    }
+  }
+  return normalized;
+}
 
-꾸밈: 이모지(🔥, 😭, 🤬, 🚀, ⚾️)를 과하다 싶을 정도로 적극적으로 사용해.
+function hashSeed(input: string): number {
+  let h = 5381;
+  for (let i = 0; i < input.length; i += 1) {
+    h = ((h << 5) + h + input.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h);
+}
 
-[Few-Shot 예시 데이터]
+function pickBySeed(items: readonly string[], seed: string): string {
+  return items[hashSeed(seed) % items.length];
+}
 
-상황: LG 팬, 실점 / 이벤트: "4회초 두산 양의지 1타점 적시타"
--> 대답: "아놔 심판 스트존 실화? 🤬 옆집한테 이런 어이없는 실점을.. 괜찮아 우리 타선이 5배로 갚아준다! 역전 가즈아!"
+function buildCreativeFallback(input: GenerateScorePushInput): string {
+  const my = findTeam(input.favoriteTeam).short;
+  const opp = findTeam(input.opponentTeam).short;
+  const hook = extractEventHook(input.latestPlayText);
+  const scoreText = `${my} ${input.myScore}:${input.oppScore} ${opp}`;
+  const seed = `${input.favoriteTeam}:${input.myScore}:${input.oppScore}:${input.latestPlayText}`;
+  const leading = input.myScore > input.oppScore;
+  const trailing = input.myScore < input.oppScore;
+  if (leading) {
+    return pickBySeed(
+      [
+        `${scoreText}. 오늘 흐름 완전 우리 쪽이다🔥`,
+        `${scoreText}. 쐐기 한 방 더 박자, 지금이다🚀`,
+        `${scoreText}${hook ? ` (${hook})` : ""} 분위기 먹었다.`,
+      ],
+      seed
+    );
+  }
+  if (trailing) {
+    return pickBySeed(
+      [
+        `${scoreText}. 아직 안 끝났다, 바로 뒤집는다.`,
+        `${scoreText}${hook ? ` (${hook})` : ""} 다음 이닝에 갚자.`,
+        `${scoreText}. 흐름 잠깐 뺏겼다, 지금부터 반격.`,
+      ],
+      seed
+    );
+  }
+  return pickBySeed(
+    [
+      `${scoreText}. 균형 맞췄다, 이제 역전각 본다.`,
+      `${scoreText}${hook ? ` (${hook})` : ""} 이 판 우리가 가져온다.`,
+      `${scoreText}. 동점이다, 여기서 끝장 보자.`,
+    ],
+    seed
+  );
+}
 
-상황: 한화 팬, 역전 / 이벤트: "8회말 한화 노시환 좌중월 투런 홈런"
--> 대답: "미쳤다 미쳤어!!! 😭😭 빛시환 폼 미쳤다!!! 상대 투수 멘탈 털렸죠? 쟤네 이제 독수리만 보면 벌벌 떱니다 ㅋㅋㅋ"
+function ensureNovelBody(input: GenerateScorePushInput, body: string): string {
+  const recentBodies = input.recentBodies ?? [];
+  if (recentBodies.length === 0) return body;
+  if (!isNearDuplicate(body, recentBodies)) return body;
+  const creative = buildCreativeFallback(input);
+  return isNearDuplicate(creative, recentBodies) ? `${creative} ⚾️` : creative;
+}
 
-상황: 롯데 팬, 병살타 / 이벤트: "6회초 롯데 전준우 유격수 병살타"
--> 대답: "아... 혈압... 또 찬물 끼얹네 🤦‍♂️ 그래도 아직 안 끝났다 마! 꼴등팀 애들 방심할 때 다음 이닝에 마 쎄리라!"
-
-상황: KIA 팬, 탈삼진 / 이벤트: "9회초 KIA 네일 3구 삼진 아웃"
--> 대답: "🔥 캬~ 네일 폼 미쳤다! 윽박지르는 직구 보소!! KKKKK!! 오늘 쟤네 타선 숨도 못 쉬죠? 이대로 승리 가자!"
-
-야구 상황 판정 규칙:
-- 9회말(또는 연장 말)에서 우리 팀 점수가 앞서면 그 순간 끝내기/경기종료로 처리해. "분위기"라는 표현 금지.
-- 모호하면 "발생 이벤트"와 "현재 스코어"를 우선 신뢰해.
-
-반드시 한 줄 문장만 출력해. 따옴표 없이 결과 문장만 출력해.`;
+function buildSystemPrompt(input: GenerateScorePushInput, recentBodies: string[]): string {
+  const favoriteTeam = findTeam(input.favoriteTeam).short;
+  const gap = resolveScoreGap(input);
+  const tier = resolveScoreGapTier(input);
+  const trailing = input.myScore < input.oppScore;
+  const avoid =
+    recentBodies.length > 0
+      ? `\n- 최근 문구와 같은 표현 재사용 금지: ${recentBodies
+          .slice(0, 4)
+          .map((line) => `"${clipForPush(line)}"`)
+          .join(", ")}`
+      : "";
+  return `너는 ${favoriteTeam} 극성팬이다.
+- 한 줄만 출력
+- 24~48자
+- 푸시 본문만 출력(설명/따옴표 금지)
+- 현재 스코어와 이벤트를 반영
+- 경기종료는 반드시 [경기종료] 톤으로 마무리
+- 스코어 갭(점수 차이) 기반 감정선 강제:
+  1) 1~2점 차(close): 간절함/긴장감/초조함
+  2) 3~5점 차(danger): 짜증/원망/분노
+  3) 6점 차 이상(garbage): 해탈/허탈/자조, 짧고 냉소적으로
+- 특히 우리 팀이 크게 지는 garbage 구간에서 "아직 안 끝났다" 금지
+- 현재 상태: 점수차=${gap}, tier=${tier}, 우리팀=${trailing ? "지고 있음" : "안 지고 있음"}${avoid}`;
 }
 
 function buildUserPrompt(input: GenerateScorePushInput): string {
   const favorite = findTeam(input.favoriteTeam);
   const opponent = findTeam(input.opponentTeam);
   const inningTag = extractInningTag(input.latestPlayText);
+  const gap = resolveScoreGap(input);
+  const tier = resolveScoreGapTier(input);
   return `현재 스코어: ${favorite.short} ${input.myScore} : ${input.oppScore} ${opponent.short}
+점수 차이: ${gap} (${tier})
 
 이닝 태그: [${inningTag}]
 
-발생 이벤트: ${input.latestPlayText}`;
+발생 이벤트: ${input.latestPlayText}
+
+최근 문구(피해야 함): ${(input.recentBodies ?? []).slice(0, 6).join(" | ") || "없음"}`;
 }
 
 function extractAnthropicText(payload: unknown): string | null {
@@ -144,16 +313,22 @@ export async function generateScorePushCopyWithOptions(
 ): Promise<{ title: string; body: string }> {
   const apiKey = options.apiKeyOverride?.trim() || process.env.ANTHROPIC_API_KEY;
   const inningTag = extractInningTag(input.latestPlayText);
+  const normalizeAndFinalize = (rawBody: string): string => {
+    const variety = ensureCopyVariety(rawBody, input);
+    const gapAware = enforceScoreGapTone(variety, input);
+    const consistent = enforceBaseballConsistency(gapAware, input);
+    const inningPrefixed = ensureInningPrefix(consistent, inningTag);
+    return clipForPush(ensureNovelBody(input, inningPrefixed));
+  };
   if (!apiKey) {
-    const consistent = enforceBaseballConsistency(input.fallbackBody, input);
     return {
       title: input.fallbackTitle,
-      body: clipForPush(ensureInningPrefix(consistent, inningTag)),
+      body: normalizeAndFinalize(input.fallbackBody),
     };
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 1000);
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 2600);
   try {
     const res = await fetch(ANTHROPIC_URL, {
       method: "POST",
@@ -165,8 +340,8 @@ export async function generateScorePushCopyWithOptions(
       body: JSON.stringify({
         model: ANTHROPIC_MODEL,
         max_tokens: options.maxTokens ?? 72,
-        temperature: options.temperature ?? 0.85,
-        system: buildSystemPrompt(findTeam(input.favoriteTeam).short),
+        temperature: options.temperature ?? 0.96,
+        system: buildSystemPrompt(input, input.recentBodies ?? []),
         messages: [
           {
             role: "user",
@@ -177,32 +352,34 @@ export async function generateScorePushCopyWithOptions(
       signal: controller.signal,
     });
     if (!res.ok) {
-      const consistent = enforceBaseballConsistency(input.fallbackBody, input);
+      const rawError = await res.text().catch(() => "");
+      console.error("[Claude API Fail]: ", {
+        status: res.status,
+        body: rawError.slice(0, 200),
+      });
       return {
         title: input.fallbackTitle,
-        body: clipForPush(ensureInningPrefix(consistent, inningTag)),
+        body: normalizeAndFinalize(input.fallbackBody),
       };
     }
     const json = await res.json();
     const generated = extractAnthropicText(json);
     if (!generated) {
-      const consistent = enforceBaseballConsistency(input.fallbackBody, input);
       return {
         title: input.fallbackTitle,
-        body: clipForPush(ensureInningPrefix(consistent, inningTag)),
+        body: normalizeAndFinalize(input.fallbackBody),
       };
     }
     const team = findTeam(input.favoriteTeam);
-    const consistent = enforceBaseballConsistency(generated, input);
     return {
       title: `⚾️ ${team.short} 실시간`,
-      body: clipForPush(ensureInningPrefix(consistent, inningTag)),
+      body: normalizeAndFinalize(generated),
     };
-  } catch {
-    const consistent = enforceBaseballConsistency(input.fallbackBody, input);
+  } catch (error) {
+    console.error("[Claude API Fail]: ", error);
     return {
       title: input.fallbackTitle,
-      body: clipForPush(ensureInningPrefix(consistent, inningTag)),
+      body: normalizeAndFinalize(input.fallbackBody),
     };
   } finally {
     clearTimeout(timeout);

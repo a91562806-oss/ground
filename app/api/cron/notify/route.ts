@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { sendWebPush } from "@/lib/webPushServer";
 import { findTeam } from "@/lib/teams";
 import { fetchKboTodayGames, starterLabel, todayKstDate } from "@/lib/kbo";
+import { shouldSkipCronInAlpha } from "@/lib/appEnv";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -235,6 +236,12 @@ export async function GET(req: Request) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
   const url = new URL(req.url);
+  if (shouldSkipCronInAlpha(url)) {
+    return NextResponse.json({
+      ok: true,
+      skipped: "ALPHA_ENV_CRON_DISABLED",
+    });
+  }
   const kindParam = url.searchParams.get("kind");
   const kind: NotifyKind = kindParam === "gameEnd" ? "gameEnd" : "preGame";
   const teamId = url.searchParams.get("teamId")?.trim().toLowerCase() || null;

@@ -20,6 +20,8 @@ type SubscribeBody = {
     preGame?: boolean;
     postGame?: boolean;
     score?: boolean;
+    livePitcherChange?: boolean;
+    liveStrikeout?: boolean;
   };
   favoriteTeam?: string;
 };
@@ -29,14 +31,19 @@ type PushTopicFlags = {
   preGame: boolean;
   postGame: boolean;
   score: boolean;
+  livePitcherChange: boolean;
+  liveStrikeout: boolean;
 };
 
 function normalizeTopics(input: SubscribeBody["topics"]): PushTopicFlags {
+  const toEnabledByDefault = (value: boolean | undefined) => (value === false ? false : true);
   return {
-    pitcher: Boolean(input?.pitcher),
-    preGame: Boolean(input?.preGame),
-    postGame: Boolean(input?.postGame),
-    score: Boolean(input?.score),
+    pitcher: toEnabledByDefault(input?.pitcher),
+    preGame: toEnabledByDefault(input?.preGame),
+    postGame: toEnabledByDefault(input?.postGame),
+    score: toEnabledByDefault(input?.score),
+    livePitcherChange: toEnabledByDefault(input?.livePitcherChange),
+    liveStrikeout: toEnabledByDefault(input?.liveStrikeout),
   };
 }
 

@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import BottomNav from "@/components/BottomNav";
 import OnboardingGate from "@/components/OnboardingGate";
+import EnvironmentBadge from "@/components/EnvironmentBadge";
 
 export const metadata: Metadata = {
   title: "내 팀을 위한 극단적 편파 알림 GROUND",
@@ -65,6 +66,7 @@ export default function RootLayout({
               color: "var(--app-text, #ffffff)",
             }}
           >
+            <EnvironmentBadge />
             <main className="flex min-h-0 flex-1 flex-col overflow-hidden pb-24">
               {children}
             </main>

@@ -8,10 +8,26 @@ import type { StandingRow } from "@/config/standings";
 export type KboTodayPayload = {
   date: string;
   status: TodayFeedStatus;
+  gamePhase?: "NONE" | "PRE" | "LIVE" | "END";
   message: string | null;
   fallback?: boolean;
   games: LiveGame[];
   standings: StandingRow[];
+  pregamePreview?: {
+    status: "PENDING" | "READY" | "FAILED";
+    title: string | null;
+    lines: string[];
+    active: boolean;
+    generatedAt: string | null;
+  } | null;
+  postGameReport?: {
+    status: "PENDING" | "GENERATING" | "READY" | "FAILED";
+    title: string | null;
+    lines: string[];
+    active: boolean;
+    visibleUntil: string | null;
+    generatedAt: string | null;
+  } | null;
 };
 
 type UseKboTodayOptions = {

@@ -31,6 +31,7 @@ import { ONBOARDING_DONE_KEY } from "@/lib/useMyTeam";
  */
 
 const STORAGE_KEY = "ground-notif-prefs";
+const EXPLICIT_OFF_KEY = "ground-notif-explicit-off";
 type NotifPrefs = PushTopics;
 
 type InboxItem = {
@@ -48,13 +49,25 @@ const TOPIC_KEYS: Array<keyof NotifPrefs> = [
   "preGame",
   "postGame",
   "score",
+  "livePitcherChange",
+  "liveStrikeout",
 ];
 
 const DEFAULT_PREFS: NotifPrefs = {
+  pitcher: true,
+  preGame: true,
+  postGame: true,
+  score: true,
+  livePitcherChange: true,
+  liveStrikeout: true,
+} as const;
+const OFF_PREFS: NotifPrefs = {
   pitcher: false,
   preGame: false,
   postGame: false,
   score: false,
+  livePitcherChange: false,
+  liveStrikeout: false,
 } as const;
 
 const ITEMS: Array<{
@@ -83,9 +96,21 @@ const ITEMS: Array<{
   },
   {
     key: "score",
-    label: "스코어 알람",
+    label: "경기중 · 스코어",
     hint: "득점/실점이 발생할 때마다 바로 푸시.",
     Icon: Bell,
+  },
+  {
+    key: "livePitcherChange",
+    label: "경기중 · 투수 교체",
+    hint: "우리팀/상대팀 투수 교체 상황을 즉시 푸시.",
+    Icon: Crosshair,
+  },
+  {
+    key: "liveStrikeout",
+    label: "경기중 · 탈삼진",
+    hint: "투수 삼진 상황을 실시간으로 푸시.",
+    Icon: Trophy,
   },
 ];
 
@@ -102,12 +127,30 @@ function hasAnyTopicEnabled(prefs: NotifPrefs): boolean {
   return TOPIC_KEYS.some((key) => prefs[key]);
 }
 
+function setExplicitOptOut(flag: boolean) {
+  try {
+    localStorage.setItem(EXPLICIT_OFF_KEY, flag ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+}
+
+function isExplicitOptOut(): boolean {
+  try {
+    return localStorage.getItem(EXPLICIT_OFF_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export default function NotificationBell({
   accent,
   iconColor = "rgba(255,255,255,0.85)",
 }: Props) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const lastLoggedEndpointRef = useRef<string | null>(null);
+  const silentRepairInFlightRef = useRef(false);
+  const recoverPrefsRef = useRef<NotifPrefs>(DEFAULT_PREFS);
   const [open, setOpen] = useState(false);
   const [prefs, setPrefs] = useState<NotifPrefs>(DEFAULT_PREFS);
   const [vapidPublicKey, setVapidPublicKey] = useState<string | null>(null);
@@ -128,7 +171,11 @@ export default function NotificationBell({
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw) as Partial<NotifPrefs>;
-        setPrefs({ ...DEFAULT_PREFS, ...parsed });
+        const hydrated = { ...DEFAULT_PREFS, ...parsed };
+        setPrefs(hydrated);
+        if (localStorage.getItem(EXPLICIT_OFF_KEY) == null) {
+          setExplicitOptOut(!hasAnyTopicEnabled(hydrated));
+        }
       } else if (localStorage.getItem(ONBOARDING_DONE_KEY) === "1") {
         // 온보딩에서 푸시 동의를 마친 유저는 기본 토픽 ON 상태로 즉시 반영.
         const hydratedPrefs: NotifPrefs = {
@@ -136,9 +183,12 @@ export default function NotificationBell({
           preGame: true,
           postGame: true,
           score: true,
+          livePitcherChange: true,
+          liveStrikeout: true,
         };
         setPrefs(hydratedPrefs);
         localStorage.setItem(STORAGE_KEY, JSON.stringify(hydratedPrefs));
+        setExplicitOptOut(false);
       }
     } catch {
       /* ignore */
@@ -162,6 +212,12 @@ export default function NotificationBell({
       localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
     } catch {
       /* ignore */
+    }
+  }, [prefs]);
+
+  useEffect(() => {
+    if (hasAnyTopicEnabled(prefs)) {
+      recoverPrefsRef.current = prefs;
     }
   }, [prefs]);
 
@@ -199,14 +255,6 @@ export default function NotificationBell({
     if (!open) return;
     void syncInbox();
   }, [open]);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
-    void navigator.serviceWorker.getRegistration("/sw.js").then(async (reg) => {
-      const sub = await reg?.pushManager.getSubscription();
-      setSubscribed(Boolean(sub));
-    });
-  }, []);
 
   async function ensureBrowserPermission(): Promise<
     NotificationPermission | "unsupported"
@@ -253,26 +301,67 @@ export default function NotificationBell({
     }
     const uid = getOrCreateNotifyUserId();
     await persistSubscription(sub, nextPrefs, uid);
+    setExplicitOptOut(false);
     setSubscribed(true);
     setPushHealth("subscribed");
     setPushHealthMsg("구독됨");
   }
 
-  async function refreshPushHealth() {
+  async function attemptSilentResubscribe(targetPrefs: NotifPrefs): Promise<boolean> {
+    if (silentRepairInFlightRef.current) return false;
+    if (!isStandalone || !vapidPublicKey) return false;
+    if (typeof window === "undefined" || !("Notification" in window)) return false;
+    if (Notification.permission !== "granted" || isExplicitOptOut()) return false;
+    silentRepairInFlightRef.current = true;
+    try {
+      const reg = await registerServiceWorker();
+      if (!reg) return false;
+      const sub = await subscribeBrowserPush(reg, vapidPublicKey);
+      const uid = getOrCreateNotifyUserId();
+      await persistSubscription(sub, targetPrefs, uid);
+      setPrefs(targetPrefs);
+      setSubscribed(true);
+      setPushHealth("subscribed");
+      setPushHealthMsg("구독됨");
+      setExplicitOptOut(false);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      silentRepairInFlightRef.current = false;
+    }
+  }
+
+  async function refreshPushHealth(options?: { allowSilentResubscribe?: boolean }) {
     try {
       setPushHealth("checking");
       setPushHealthMsg("확인 중");
       if (typeof window === "undefined" || !("serviceWorker" in navigator)) {
+        setPrefs(OFF_PREFS);
+        setSubscribed(false);
         setPushHealth("error");
         setPushHealthMsg("미지원 브라우저");
         return;
       }
-      const reg = await navigator.serviceWorker.getRegistration("/sw.js");
+      const desiredPrefs = prefs;
+      const recoverPrefs = hasAnyTopicEnabled(desiredPrefs) ? desiredPrefs : recoverPrefsRef.current;
+      const reg =
+        (await navigator.serviceWorker.getRegistration("/sw.js")) ??
+        (await navigator.serviceWorker.ready.catch(() => null));
       const sub = await reg?.pushManager.getSubscription();
       if (!sub) {
+        setPrefs(OFF_PREFS);
         setSubscribed(false);
         setPushHealth("unsubscribed");
         setPushHealthMsg("미구독");
+        if (
+          options?.allowSilentResubscribe !== false &&
+          hasAnyTopicEnabled(recoverPrefs) &&
+          !isExplicitOptOut()
+        ) {
+          const recovered = await attemptSilentResubscribe(recoverPrefs);
+          if (recovered) return;
+        }
         return;
       }
       const subJson = sub.toJSON();
@@ -304,6 +393,22 @@ export default function NotificationBell({
         setSubscribed(false);
         setPushHealth("unsubscribed");
         setPushHealthMsg("미구독");
+        if (
+          options?.allowSilentResubscribe !== false &&
+          hasAnyTopicEnabled(desiredPrefs) &&
+          !isExplicitOptOut()
+        ) {
+          const uid = getOrCreateNotifyUserId();
+          try {
+            await persistSubscription(sub, desiredPrefs, uid);
+            setSubscribed(true);
+            setPushHealth("subscribed");
+            setPushHealthMsg("구독됨");
+            setExplicitOptOut(false);
+          } catch {
+            // ignore and keep unsubscribed state
+          }
+        }
       }
     } catch {
       setPushHealth("error");
@@ -322,14 +427,19 @@ export default function NotificationBell({
     setLoading(true);
     try {
       if (turningOn) {
+        setExplicitOptOut(false);
         await pushSubscribe(nextPrefs);
       } else if (!hasAnyTopicEnabled(nextPrefs) && subscribed) {
+        setExplicitOptOut(true);
         const uid = getOrCreateNotifyUserId();
         await unsubscribeBrowserPush(uid);
         setSubscribed(false);
         setPushHealth("unsubscribed");
         setPushHealthMsg("미구독");
+      } else if (!hasAnyTopicEnabled(nextPrefs)) {
+        setExplicitOptOut(true);
       } else if (subscribed) {
+        setExplicitOptOut(false);
         await pushSubscribe(nextPrefs);
       }
     } catch {
@@ -338,18 +448,23 @@ export default function NotificationBell({
       setPushHealthMsg("구독 처리 에러");
     } finally {
       setLoading(false);
-      void refreshPushHealth();
+      void refreshPushHealth({ allowSilentResubscribe: true });
     }
   }
 
   useEffect(() => {
     if (!open) return;
-    void refreshPushHealth();
+    void refreshPushHealth({ allowSilentResubscribe: true });
     const id = window.setInterval(() => {
-      void refreshPushHealth();
+      void refreshPushHealth({ allowSilentResubscribe: true });
     }, 5000);
     return () => window.clearInterval(id);
-  }, [open]);
+  }, [open, vapidPublicKey, isStandalone]);
+
+  useEffect(() => {
+    if (!vapidPublicKey) return;
+    void refreshPushHealth({ allowSilentResubscribe: true });
+  }, [vapidPublicKey, isStandalone]);
 
   async function onBellClick() {
     setErrorMsg(null);
