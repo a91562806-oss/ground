@@ -77,32 +77,29 @@ export async function POST(req: Request) {
   const topics = normalizeTopics(body.topics);
 
   const userAgent = req.headers.get("user-agent") ?? undefined;
-  const saved = await prisma.$transaction(async (tx) => {
-    // 내 유저/현재 기기(user-agent)/같은 endpoint 로 남아있는 낡은 레코드를 전부 지우고
-    // 현재 구독 한 건만 새로 생성한다.
-    await tx.pushSubscription.deleteMany({
-      where: {
-        OR: [
-          { userId },
-          ...(userAgent ? [{ userAgent }] : []),
-          { endpoint },
-        ],
-      },
-    });
-
-    return tx.pushSubscription.create({
-      data: {
-        userId,
-        endpoint,
-        p256dh,
-        auth,
-        expirationTime: expiration,
-        enabled: true,
-        topics,
-        userAgent,
-        lastSeenAt: new Date(),
-      },
-    });
+  const saved = await prisma.pushSubscription.upsert({
+    where: { endpoint },
+    update: {
+      userId,
+      p256dh,
+      auth,
+      expirationTime: expiration,
+      enabled: true,
+      topics,
+      userAgent,
+      lastSeenAt: new Date(),
+    },
+    create: {
+      userId,
+      endpoint,
+      p256dh,
+      auth,
+      expirationTime: expiration,
+      enabled: true,
+      topics,
+      userAgent,
+      lastSeenAt: new Date(),
+    },
   });
 
   return NextResponse.json({
