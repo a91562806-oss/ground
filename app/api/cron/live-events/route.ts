@@ -4,6 +4,7 @@ import { findTeam } from "@/lib/teams";
 import { shouldSkipCronInAlpha } from "@/lib/appEnv";
 import { authorizeCron, markDispatchOnce, sendTeamTopicNotification } from "@/services/notificationService";
 import { generateLiveEventCopy } from "@/lib/pushLlm";
+import { isKboGameHour } from "@/lib/cronGuard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -222,11 +223,18 @@ export async function GET(req: Request) {
   if (!auth.ok) return NextResponse.json({ ok: false, error: auth.error }, { status: auth.status });
   if (shouldSkipCronInAlpha(url)) return NextResponse.json({ ok: true, skipped: "ALPHA_ENV_CRON_DISABLED" });
 
+  // 경기 시간대 외에는 즉시 종료 (주중 18~22:30, 주말 14~21시)
+  if (!isKboGameHour()) {
+    return NextResponse.json({ ok: true, skipped: "OUT_OF_GAME_HOURS" });
+  }
+
   const date = todayKstDate();
   const schedule = await fetchKboSchedule(date);
   const liveGames = schedule.today.filter((game) => game.status === "LIVE");
   let sent = 0;
   let skipped = 0;
+  // Claude 호출 캐시: 같은 (gameId:kind:seqNo:isPitching) 조합은 1회만 호출
+  const llmCache = new Map<string, Promise<string>>();
 
   for (const game of liveGames) {
     const relay = await fetchRelayInfo(game.id);
@@ -260,15 +268,21 @@ export async function GET(req: Request) {
         const oppTeamShort = findTeam(opponentTeamId).short;
         const fallback = buildLiveEventCopy(kind, myTeamShort, oppTeamShort, isPitching, relay.inningLabel);
 
-        // Claude로 문구 생성, 타임아웃/실패 시 fallback 사용
-        const llmBody = await generateLiveEventCopy({
-          kind,
-          myTeamShort,
-          oppTeamShort,
-          isPitching,
-          inningLabel: relay.inningLabel,
-          fallbackBody: fallback.body,
-        });
+        // Claude 캐시: 같은 이벤트+관점 조합은 1회만 호출해서 비용 절감
+        const llmCacheKey = `${game.id}:${kind}:${relay.eventKey}:${String(isPitching)}`;
+        let llmPromise = llmCache.get(llmCacheKey);
+        if (!llmPromise) {
+          llmPromise = generateLiveEventCopy({
+            kind,
+            myTeamShort,
+            oppTeamShort,
+            isPitching,
+            inningLabel: relay.inningLabel,
+            fallbackBody: fallback.body,
+          });
+          llmCache.set(llmCacheKey, llmPromise);
+        }
+        const llmBody = await llmPromise;
 
         // 이닝 레이블 prefix 보장
         const inningPrefix = relay.inningLabel ? `[${relay.inningLabel}] ` : "";

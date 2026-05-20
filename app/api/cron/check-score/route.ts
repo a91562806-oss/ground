@@ -9,6 +9,7 @@ import { loadMockSnapshotWithOverrides, readScoreCronDevOverrides } from "@/lib/
 import { sendCancelAlerts } from "@/lib/score/cancelAlert";
 import { dispatchScoreAlertsForGame } from "@/lib/score/scoreAlert";
 import { authorizeCron } from "@/services/notificationService";
+import { isKboGameHour } from "@/lib/cronGuard";
 import type { LiveScoreGame } from "@/lib/score/types";
 
 export const runtime = "nodejs";
@@ -95,6 +96,12 @@ export async function GET(req: Request) {
   if (!auth.ok) return NextResponse.json({ ok: false, error: auth.error }, { status: auth.status });
   if (shouldSkipCronInAlpha(url)) {
     return NextResponse.json({ ok: true, skipped: "ALPHA_ENV_CRON_DISABLED" });
+  }
+
+  // 경기 시간대 외에는 즉시 종료 (주중 18~22:30, 주말 14~21시)
+  // force=1 파라미터로 수동 트리거 시 우회 가능
+  if (!isKboGameHour() && !url.searchParams.get("force")) {
+    return NextResponse.json({ ok: true, skipped: "OUT_OF_GAME_HOURS" });
   }
 
   const fastMode = isFastMode(url);
