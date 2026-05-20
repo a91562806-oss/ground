@@ -303,6 +303,92 @@ function extractAnthropicText(payload: unknown): string | null {
   return text.length > 0 ? text : null;
 }
 
+// ─── Live Event (Strikeout / Pitcher Change) ─────────────────────────────────
+
+type GenerateLiveEventInput = {
+  kind: "strikeout" | "pitcherChange";
+  myTeamShort: string;
+  oppTeamShort: string;
+  /** true=내 팀 수비(투구), false=내 팀 공격(타석), null=불명 */
+  isPitching: boolean | null;
+  inningLabel: string | null;
+  recentBodies?: string[];
+  fallbackBody: string;
+};
+
+function buildLiveEventSystemPrompt(input: GenerateLiveEventInput): string {
+  const side =
+    input.isPitching === true  ? `${input.myTeamShort}이 수비(투구) 중` :
+    input.isPitching === false ? `${input.myTeamShort}이 공격(타석) 중` :
+    "공수 불명";
+
+  const kindKo = input.kind === "strikeout" ? "탈삼진" : "투수 교체";
+  const avoid =
+    (input.recentBodies ?? []).length > 0
+      ? `\n- 최근 문구 재사용 금지: ${(input.recentBodies ?? []).slice(0, 4).map((l) => `"${l.slice(0, 30)}"`).join(", ")}`
+      : "";
+
+  return `너는 ${input.myTeamShort} 극성팬이다.
+- 지금 경기 중 '${kindKo}' 이벤트가 발생했다.
+- 현재 상황: ${side}
+- 내 팀 관점에서 한 줄 리액션을 써라.
+- 규칙:
+  • 한 줄, 20~40자
+  • 푸시 본문만 출력(따옴표/설명 금지)
+  • 수비 중 탈삼진 → 투수 응원, 흥분, 자신감 폭발
+  • 공격 중 삼진 아웃 → 아쉬움, 짜증, 다음 타자 기대
+  • 내 팀 투수 교체 → 위기감, 제발 막아라 간절함
+  • 상대 투수 교체 → 기대감, 지금이 찬스다 텐션
+  • 이닝 레이블은 절대 다시 쓰지 마(이미 앞에 붙음)${avoid}`;
+}
+
+function buildLiveEventUserPrompt(input: GenerateLiveEventInput): string {
+  const kindKo = input.kind === "strikeout" ? "탈삼진" : "투수 교체";
+  const inning = input.inningLabel ?? "경기 중";
+  return `이닝: ${inning}
+이벤트: ${kindKo}
+팀: ${input.myTeamShort} vs ${input.oppTeamShort}
+상황: ${input.isPitching === true ? "내 팀 수비 중" : input.isPitching === false ? "내 팀 공격 중" : "공수 불명"}`;
+}
+
+export async function generateLiveEventCopy(
+  input: GenerateLiveEventInput
+): Promise<string> {
+  const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
+  if (!apiKey) return input.fallbackBody;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2400);
+  try {
+    const res = await fetch(ANTHROPIC_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: ANTHROPIC_MODEL,
+        max_tokens: 64,
+        temperature: 0.95,
+        system: buildLiveEventSystemPrompt(input),
+        messages: [{ role: "user", content: buildLiveEventUserPrompt(input) }],
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) return input.fallbackBody;
+    const json = await res.json();
+    const text = extractAnthropicText(json);
+    return text ? compactText(text).slice(0, 60) : input.fallbackBody;
+  } catch {
+    return input.fallbackBody;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// ─── Score Push ───────────────────────────────────────────────────────────────
+
 export async function generateScorePushCopy(input: GenerateScorePushInput): Promise<{ title: string; body: string }> {
   return generateScorePushCopyWithOptions(input, {});
 }

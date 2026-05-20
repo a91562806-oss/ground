@@ -3,6 +3,7 @@ import { fetchKboSchedule, todayKstDate } from "@/lib/kbo";
 import { findTeam } from "@/lib/teams";
 import { shouldSkipCronInAlpha } from "@/lib/appEnv";
 import { authorizeCron, markDispatchOnce, sendTeamTopicNotification } from "@/services/notificationService";
+import { generateLiveEventCopy } from "@/lib/pushLlm";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -255,19 +256,29 @@ export async function GET(req: Request) {
           isPitching = relay.battingSide !== teamSide;
         }
 
-        const copy = buildLiveEventCopy(
+        const myTeamShort  = findTeam(teamId).short;
+        const oppTeamShort = findTeam(opponentTeamId).short;
+        const fallback = buildLiveEventCopy(kind, myTeamShort, oppTeamShort, isPitching, relay.inningLabel);
+
+        // Claude로 문구 생성, 타임아웃/실패 시 fallback 사용
+        const llmBody = await generateLiveEventCopy({
           kind,
-          findTeam(teamId).short,
-          findTeam(opponentTeamId).short,
+          myTeamShort,
+          oppTeamShort,
           isPitching,
-          relay.inningLabel,
-        );
+          inningLabel: relay.inningLabel,
+          fallbackBody: fallback.body,
+        });
+
+        // 이닝 레이블 prefix 보장
+        const inningPrefix = relay.inningLabel ? `[${relay.inningLabel}] ` : "";
+        const finalBody = llmBody.startsWith("[") ? llmBody : `${inningPrefix}${llmBody}`;
 
         const result = await sendTeamTopicNotification({
           teamId,
           topicKey: kind === "pitcherChange" ? "livePitcherChange" : "liveStrikeout",
-          title: copy.title,
-          body: copy.body,
+          title: fallback.title,
+          body: finalBody,
           url: "/today",
           payload: {
             kind: "live-event",
