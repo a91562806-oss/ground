@@ -102,16 +102,17 @@ export default function PageShell({ children }: { children: React.ReactNode }) {
       const dt = Math.max(1, Date.now() - startTime);
       const vx = dx / dt * 1000; // px/s
 
-      const goRight = dx > SWIPE_PX || vx > SWIPE_VX;   // →  다음 탭
-      const goLeft  = dx < -SWIPE_PX || vx < -SWIPE_VX; // ←  이전 탭
+      // iOS 홈 화면과 동일: 오른쪽→왼쪽(dx<0) = 오른쪽 탭(index+1)
+      const swipeLeft  = dx < -SWIPE_PX || vx < -SWIPE_VX; // ←  오른쪽 탭으로
+      const swipeRight = dx > SWIPE_PX  || vx > SWIPE_VX;  // →  왼쪽 탭으로
 
-      if (goRight) {
+      if (swipeLeft) {
         const nextIdx = Math.min(currentIndex + 1, ROUTES.length - 1);
         if (nextIdx !== currentIndex) {
           router.replace(ROUTES[nextIdx] as Route);
           bumpHaptic();
         }
-      } else if (goLeft) {
+      } else if (swipeRight) {
         const prevIdx = Math.max(currentIndex - 1, 0);
         if (prevIdx !== currentIndex) {
           router.replace(ROUTES[prevIdx] as Route);
