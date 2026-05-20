@@ -21,22 +21,28 @@ type InsightOverlayProps =
   | {
       kind: "pregame";
       pregamePreview: PregamePreviewView | null;
+      /** X 버튼: 현재 세션만 닫기 (localStorage 기록 없음 → 앱 재시작 시 다시 뜸) */
+      onClose: () => void;
+      /** 다시 보지 않기: localStorage에 기록 → 오늘 하루 숨김 */
       onDismiss: () => void;
     }
   | {
       kind: "postgame";
       postGameReport: PostGameReportView | null;
       postGameVisibleUntilLabel: string | null;
+      onClose: () => void;
       onDismiss: () => void;
     }
   | { kind: null };
 
 /**
  * 경기 프리뷰 / 경기 종료 한줄평을 Today 탭에 띄우는 모달 오버레이.
- * 같은 시점에 두 인사이트가 활성화되면 라우터에서 우선순위(postgame > pregame)를 정한다.
+ * - onClose  : X 버튼 → 세션 내 닫기만, 앱 재시작 시 다시 표시
+ * - onDismiss: 다시 보지 않기 → localStorage 기록, 오늘 하루 숨김
  */
 export default function InsightOverlay(props: InsightOverlayProps) {
   const active = props.kind != null;
+  const onClose = props.kind != null ? props.onClose : undefined;
   const onDismiss = props.kind != null ? props.onDismiss : undefined;
   return (
     <AnimatePresence>
@@ -57,10 +63,10 @@ export default function InsightOverlay(props: InsightOverlayProps) {
             transition={{ duration: 0.28, ease }}
             className="absolute inset-x-5 top-[44%] mx-auto w-[min(92vw,680px)] -translate-y-1/2 rounded-3xl border border-white/10 bg-black/40 shadow-[0_20px_60px_rgba(0,0,0,0.55)] backdrop-blur-2xl backdrop-saturate-150"
           >
-            {/* 닫기 X — 우상단 */}
+            {/* 닫기 X — 세션 내 닫기만 */}
             <button
               type="button"
-              onClick={onDismiss}
+              onClick={onClose}
               className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white/60 backdrop-blur-md transition hover:bg-white/15 hover:text-white"
               aria-label="인사이트 닫기"
             >
@@ -80,7 +86,7 @@ export default function InsightOverlay(props: InsightOverlayProps) {
               ) : null}
             </div>
 
-            {/* 하단 구분선 + 다시보지 않기 버튼 */}
+            {/* 하단 구분선 + 다시보지 않기 버튼 (localStorage 기록) */}
             <div className="border-t border-white/[0.08] px-6 py-4">
               <button
                 type="button"
