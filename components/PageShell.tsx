@@ -2,7 +2,7 @@
 
 import { useRouter, usePathname } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 
 /**
  * Apple Sports 스타일 탭 전환 셸.
@@ -22,27 +22,18 @@ const SWIPE_PX = 72;      // 이 거리 이상 이동하면 탭 전환
 const SWIPE_VX = 400;     // 또는 이 이상의 속도면 전환
 const AXIS_LOCK_PX = 6;   // 이 거리 이후 축 확정
 
-const SPRING = {
-  type: "spring" as const,
-  stiffness: 300,
-  damping: 30,
-  mass: 0.85,
+const FADE = {
+  duration: 0.22,
+  ease: [0.22, 1, 0.36, 1] as const,
 };
 
 const variants = {
-  enter: (dir: number) => ({
-    x: dir >= 0 ? "100%" : "-100%",
-    opacity: 0.35,
-  }),
-  center: {
-    x: 0,
-    opacity: 1,
-  },
-  exit: (dir: number) => ({
-    x: dir >= 0 ? "-10%" : "10%",
+  enter: { opacity: 0 },
+  center: { opacity: 1 },
+  exit: {
     opacity: 0,
-    transition: { duration: 0.18, ease: [0.32, 0, 0.67, 0] },
-  }),
+    transition: { duration: 0.15, ease: [0.32, 0, 0.67, 0] },
+  },
 };
 
 function resolveIndex(path: string | null | undefined): number {
@@ -54,24 +45,13 @@ export default function PageShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
 
-  const [direction, setDirection] = useState(0);
   const prevPathRef = useRef<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   const currentIndex = resolveIndex(pathname);
   const inTabRoute = currentIndex !== -1;
 
-  // pathname 변경 시 방향 계산
   useEffect(() => {
-    if (!pathname) return;
-    const prev = prevPathRef.current;
-    if (prev != null) {
-      const prevIdx = resolveIndex(prev);
-      const nextIdx = resolveIndex(pathname);
-      if (prevIdx !== -1 && nextIdx !== -1 && prevIdx !== nextIdx) {
-        setDirection(nextIdx > prevIdx ? 1 : -1);
-      }
-    }
     prevPathRef.current = pathname;
   }, [pathname]);
 
@@ -128,14 +108,12 @@ export default function PageShell({ children }: { children: React.ReactNode }) {
       if (goRight) {
         const nextIdx = Math.min(currentIndex + 1, ROUTES.length - 1);
         if (nextIdx !== currentIndex) {
-          setDirection(1);
           router.replace(ROUTES[nextIdx] as Route);
           bumpHaptic();
         }
       } else if (goLeft) {
         const prevIdx = Math.max(currentIndex - 1, 0);
         if (prevIdx !== currentIndex) {
-          setDirection(-1);
           router.replace(ROUTES[prevIdx] as Route);
           bumpHaptic();
         }
@@ -163,16 +141,15 @@ export default function PageShell({ children }: { children: React.ReactNode }) {
       ref={containerRef}
       className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
     >
-      <AnimatePresence mode="wait" custom={direction} initial={false}>
+      <AnimatePresence mode="sync" initial={false}>
         <motion.div
           key={pathname}
           className="absolute inset-0 flex min-h-0 flex-col"
-          custom={direction}
           variants={variants}
           initial="enter"
           animate="center"
           exit="exit"
-          transition={SPRING}
+          transition={FADE}
         >
           {children}
         </motion.div>
