@@ -88,6 +88,23 @@ export async function GET(req: Request) {
   const title = (url.searchParams.get("title") ?? "").trim() || copy.title;
   const body = (url.searchParams.get("body") ?? "").trim() || copy.body;
 
+  // `listUsers=1` 이면 alpha 구독자 userId 목록만 반환 (발송 없음).
+  if (url.searchParams.get("listUsers") === "1") {
+    const subs = await prisma.pushSubscription.findMany({
+      where: { enabled: true, user: { favoriteTeam: teamId } },
+      select: { userId: true, topics: true, updatedAt: true },
+      orderBy: { updatedAt: "desc" },
+      take: 20,
+    });
+    const alpha = subs.filter((s) => (s.topics as Record<string, unknown>)?.appEnv === "alpha");
+    return NextResponse.json({
+      ok: true,
+      teamId,
+      alphaCount: alpha.length,
+      users: alpha.map((s) => ({ userId: s.userId, updatedAt: s.updatedAt })),
+    });
+  }
+
   // `userId=` 파라미터가 있으면 그 1명에게만 직접 발송 (테스트 오발 방지).
   // 없으면 팀 전체 alpha 구독자에게 sendTeamTopicNotification 경유.
   const targetUserId = (url.searchParams.get("userId") ?? "").trim();
