@@ -22,8 +22,8 @@ export type KboTodayPayload = {
   } | null;
   postGameReport?: {
     status: "PENDING" | "GENERATING" | "READY" | "FAILED";
-    title: string | null;
-    lines: string[];
+    headline: string | null;
+    content: string | null;
     active: boolean;
     visibleUntil: string | null;
     generatedAt: string | null;

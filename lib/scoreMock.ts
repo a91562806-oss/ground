@@ -1,3 +1,8 @@
+/**
+ * `check-score` cron 의 alpha 환경 검증용 mock 스냅샷.
+ * production 에서는 호출되지 않으며, `lib/score/devOverrides.ts` 가 입구.
+ */
+
 export type MockScoreGame = {
   externalId: string;
   homeTeam: string;
@@ -8,51 +13,21 @@ export type MockScoreGame = {
   gameDate: Date;
 };
 
-/**
- * TODO: 추후 실제 스코어 API 연동으로 교체.
- * 현재는 크론 점검을 위한 mock 스냅샷을 분 단위로 가볍게 변형한다.
- */
-export async function fetchMockScoreSnapshot(now: Date = new Date()): Promise<MockScoreGame[]> {
-  const tick = Math.floor(now.getTime() / 60_000) % 4;
-  const resolvedTick = tick;
-  const scoreByTick: Array<{ home: number; away: number }> = [
-    { home: 0, away: 0 },
-    { home: 1, away: 0 },
-    { home: 1, away: 1 },
-    { home: 2, away: 1 },
-  ];
-  const score = scoreByTick[resolvedTick];
-  const gameDate = new Date(now);
-  gameDate.setHours(18, 30, 0, 0);
-
-  return [
-    {
-      externalId: "mock-2026-lg-doosan",
-      homeTeam: "doosan",
-      awayTeam: "lg",
-      homeScore: score.home,
-      awayScore: score.away,
-      status: "LIVE",
-      gameDate,
-    },
-  ];
-}
+const SCORE_BY_TICK: ReadonlyArray<{ home: number; away: number }> = [
+  { home: 0, away: 0 },
+  { home: 1, away: 0 },
+  { home: 1, away: 1 },
+  { home: 2, away: 1 },
+];
 
 export async function fetchMockScoreSnapshotByTick(
   tickOverride: number,
   now: Date = new Date()
 ): Promise<MockScoreGame[]> {
-  const scoreByTick: Array<{ home: number; away: number }> = [
-    { home: 0, away: 0 },
-    { home: 1, away: 0 },
-    { home: 1, away: 1 },
-    { home: 2, away: 1 },
-  ];
-  const normalized = Math.abs(Math.floor(tickOverride)) % scoreByTick.length;
-  const score = scoreByTick[normalized];
+  const normalized = Math.abs(Math.floor(tickOverride)) % SCORE_BY_TICK.length;
+  const score = SCORE_BY_TICK[normalized];
   const gameDate = new Date(now);
   gameDate.setHours(18, 30, 0, 0);
-
   return [
     {
       externalId: "mock-2026-lg-doosan",

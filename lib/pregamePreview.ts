@@ -2,7 +2,11 @@ import { findTeam } from "@/lib/teams";
 import type { LiveGame } from "@/lib/kbo";
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
-const ANTHROPIC_MODEL = process.env.PUSH_LLM_MODEL ?? "claude-3-haiku-20240307";
+const ANTHROPIC_MODEL =
+  process.env.PREGAME_LLM_MODEL ??
+  process.env.POSTGAME_LLM_MODEL ??
+  process.env.PUSH_LLM_MODEL ??
+  "claude-sonnet-4-6";
 const NAVER_BASE = "https://api-gw.sports.naver.com";
 const NAVER_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 GroundBot/1.0";
@@ -204,49 +208,65 @@ export async function generatePregamePreview(input: PregamePreviewInput): Promis
 최근 스코어:${recent.scores.join(" / ") || "없음"}
 프리뷰/뉴스 컨텍스트:${newsBlock}`;
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2500);
-  try {
-    const res = await fetch(ANTHROPIC_URL, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: ANTHROPIC_MODEL,
-        max_tokens: 340,
-        temperature: 0.94,
-        system,
-        messages: [{ role: "user", content: user }],
-      }),
-      signal: controller.signal,
-    });
-    if (!res.ok) return fallback;
-    const json = (await res.json()) as { content?: Array<{ type?: string; text?: string }> };
-    const text =
-      json.content
-        ?.filter((item) => item.type === "text" && typeof item.text === "string")
-        .map((item) => item.text ?? "")
-        .join("\n") ?? "";
-    const parsed = parseStructuredResponse(text);
-    const title = clip(parsed?.title ?? "", 42);
-    const lines = (parsed?.lines ?? []).map((line) => clip(line)).filter((line) => line.length > 0).slice(0, 4);
-    if (!title || lines.length < 3) return fallback;
-    return {
-      title,
-      lines,
-      context: {
-        recentForm: recent.form,
-        recentScores: recent.scores,
-        newsSnippets: input.newsContext.slice(0, 4),
-      },
-      source: "llm",
-    };
-  } catch {
-    return fallback;
-  } finally {
-    clearTimeout(timeout);
-  }
+  const callLlm = async (timeoutMs: number) => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(ANTHROPIC_URL, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: ANTHROPIC_MODEL,
+          max_tokens: 340,
+          temperature: 0.94,
+          system,
+          messages: [{ role: "user", content: user }],
+        }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        console.error("[pregame-llm] bad_response", res.status, body.slice(0, 280));
+        return null;
+      }
+      const json = (await res.json()) as { content?: Array<{ type?: string; text?: string }> };
+      const text =
+        json.content
+          ?.filter((item) => item.type === "text" && typeof item.text === "string")
+          .map((item) => item.text ?? "")
+          .join("\n") ?? "";
+      const parsed = parseStructuredResponse(text);
+      const title = clip(parsed?.title ?? "", 42);
+      const lines = (parsed?.lines ?? [])
+        .map((line) => clip(line))
+        .filter((line) => line.length > 0)
+        .slice(0, 4);
+      if (!title || lines.length < 3) return null;
+      return { title, lines };
+    } catch (error) {
+      console.error("[pregame-llm] request_failed", (error as Error).message);
+      return null;
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+
+  const first = await callLlm(8000);
+  const second = first ? null : await callLlm(12000);
+  const best = first ?? second;
+  if (!best) return fallback;
+  return {
+    title: best.title,
+    lines: best.lines,
+    context: {
+      recentForm: recent.form,
+      recentScores: recent.scores,
+      newsSnippets: input.newsContext.slice(0, 4),
+    },
+    source: "llm",
+  };
 }

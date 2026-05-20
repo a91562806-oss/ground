@@ -36,6 +36,21 @@ enum PregamePreviewStatus {
   FAILED
 }
 
+model NotificationDispatchState {
+  id          String   @id @default(cuid())
+  alertKind   String
+  teamScope   String
+  eventKey    String
+  gameExternalId String?
+  payload     Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([alertKind, teamScope, eventKey])
+  @@index([gameExternalId, alertKind, createdAt])
+  @@index([alertKind, createdAt])
+}
+
 model User {
   id                String             @id @default(cuid())
   email             String?            @unique
@@ -99,6 +114,9 @@ model Game {
   gameDate    DateTime?
   startedAt   DateTime?
   endedAt     DateTime?
+  highlightNotifiedAt DateTime?
+  highlightVideoUrl   String?
+  lastHighlightCheckedAt DateTime?
   lastScoreAlertKey String?
   lastScoreAlertAt  DateTime?
   lastSyncedAt DateTime  @default(now())
@@ -116,6 +134,7 @@ model PostGameReport {
   gameDate   DateTime?
   status     PostGameReportStatus @default(PENDING)
   title      String?
+  content    String?
   bodyLines  Json?
   facts      Json?
   error      String?

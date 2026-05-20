@@ -48,6 +48,7 @@ const TOPIC_KEYS: Array<keyof NotifPrefs> = [
   "pitcher",
   "preGame",
   "postGame",
+  "highlight",
   "score",
   "livePitcherChange",
   "liveStrikeout",
@@ -57,6 +58,7 @@ const DEFAULT_PREFS: NotifPrefs = {
   pitcher: true,
   preGame: true,
   postGame: true,
+  highlight: true,
   score: true,
   livePitcherChange: true,
   liveStrikeout: true,
@@ -65,52 +67,107 @@ const OFF_PREFS: NotifPrefs = {
   pitcher: false,
   preGame: false,
   postGame: false,
+  highlight: false,
   score: false,
   livePitcherChange: false,
   liveStrikeout: false,
 } as const;
 
-const ITEMS: Array<{
-  key: keyof NotifPrefs;
+type ToggleItem = {
+  id: string;
+  topicKeys: Array<keyof NotifPrefs>;
   label: string;
   hint: string;
   Icon: typeof Bell;
-}> = [
+};
+
+const ITEMS_DEFAULT: ToggleItem[] = [
   {
-    key: "pitcher",
+    id: "pitcher",
+    topicKeys: ["pitcher"],
     label: "선발 투수 업데이트",
     hint: "라인업이 확정되면 바로 알려드릴게요.",
     Icon: Crosshair,
   },
   {
-    key: "preGame",
+    id: "preGame",
+    topicKeys: ["preGame"],
     label: "경기 시작 직전",
     hint: "플레이볼 15분 전 푸시.",
     Icon: Play,
   },
   {
-    key: "postGame",
+    id: "postGame",
+    topicKeys: ["postGame", "highlight"],
     label: "경기 종료 · 하이라이트",
     hint: "최종 스코어와 주요 장면 요약.",
     Icon: Trophy,
   },
   {
-    key: "score",
+    id: "score",
+    topicKeys: ["score"],
     label: "경기중 · 스코어",
     hint: "득점/실점이 발생할 때마다 바로 푸시.",
     Icon: Bell,
   },
   {
-    key: "livePitcherChange",
+    id: "livePitcherChange",
+    topicKeys: ["livePitcherChange"],
     label: "경기중 · 투수 교체",
     hint: "우리팀/상대팀 투수 교체 상황을 즉시 푸시.",
     Icon: Crosshair,
   },
   {
-    key: "liveStrikeout",
+    id: "liveStrikeout",
+    topicKeys: ["liveStrikeout"],
     label: "경기중 · 탈삼진",
     hint: "투수 삼진 상황을 실시간으로 푸시.",
     Icon: Trophy,
+  },
+];
+
+const ITEMS_ALPHA: ToggleItem[] = [
+  {
+    id: "preview",
+    topicKeys: ["pitcher"],
+    label: "경기 프리뷰",
+    hint: "오늘 경기 관전 포인트를 분석해서 알려드려요",
+    Icon: Crosshair,
+  },
+  {
+    id: "gameStart",
+    topicKeys: ["preGame"],
+    label: "경기 시작",
+    hint: "플레이볼 15분 전 알려드려요",
+    Icon: Play,
+  },
+  {
+    id: "scoreAlert",
+    topicKeys: ["score"],
+    label: "스코어 알림",
+    hint: "득/실점이 발생되면 알려드려요",
+    Icon: Bell,
+  },
+  {
+    id: "liveSituation",
+    topicKeys: ["livePitcherChange", "liveStrikeout"],
+    label: "라이브 경기 상황",
+    hint: "투수 교체, 탈삼진 등 알려드려요.",
+    Icon: Crosshair,
+  },
+  {
+    id: "gameResult",
+    topicKeys: ["postGame"],
+    label: "경기 결과",
+    hint: "최종 스코어를 알려드려요.",
+    Icon: Trophy,
+  },
+  {
+    id: "highlight",
+    topicKeys: ["highlight"],
+    label: "하이라이트",
+    hint: "경기 하이라이트가 올라오면 알려드려요.",
+    Icon: Share2,
   },
 ];
 
@@ -147,6 +204,8 @@ export default function NotificationBell({
   accent,
   iconColor = "rgba(255,255,255,0.85)",
 }: Props) {
+  const isAlphaEnv = process.env.NEXT_PUBLIC_APP_ENV === "alpha";
+  const items = isAlphaEnv ? ITEMS_ALPHA : ITEMS_DEFAULT;
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const lastLoggedEndpointRef = useRef<string | null>(null);
   const silentRepairInFlightRef = useRef(false);
@@ -182,6 +241,7 @@ export default function NotificationBell({
           pitcher: true,
           preGame: true,
           postGame: true,
+          highlight: true,
           score: true,
           livePitcherChange: true,
           liveStrikeout: true,
@@ -416,13 +476,17 @@ export default function NotificationBell({
     }
   }
 
-  async function toggle(key: keyof NotifPrefs) {
+  async function toggleKeys(topicKeys: Array<keyof NotifPrefs>) {
     if (!isStandalone) {
       setErrorMsg("홈 화면에 설치한 앱에서만 알림 구독이 가능해요.");
       return;
     }
-    const turningOn = !prefs[key];
-    const nextPrefs = { ...prefs, [key]: turningOn };
+    const allOn = topicKeys.every((key) => prefs[key]);
+    const turningOn = !allOn;
+    const nextPrefs: NotifPrefs = { ...prefs };
+    for (const key of topicKeys) {
+      nextPrefs[key] = turningOn;
+    }
     setPrefs(nextPrefs);
     setLoading(true);
     try {
@@ -596,13 +660,13 @@ export default function NotificationBell({
 
             {/* 항목 */}
             <div className="px-2 pb-2 pt-1">
-              {ITEMS.map(({ key, label, hint, Icon }) => {
-                const on = prefs[key];
+              {items.map(({ id, topicKeys, label, hint, Icon }) => {
+                const on = topicKeys.every((key) => prefs[key]);
                 return (
                   <button
-                    key={key}
+                    key={id}
                     type="button"
-                    onClick={() => toggle(key)}
+                    onClick={() => toggleKeys(topicKeys)}
                     disabled={loading}
                     className="flex w-full items-start gap-3 rounded-xl px-2.5 py-2.5 text-left transition-colors hover:bg-white/[0.04]"
                     aria-pressed={on}

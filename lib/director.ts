@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
  *
  * 노출 규칙:
  *  - dev (NODE_ENV !== "production"): 기본 ON
+ *  - alpha (NEXT_PUBLIC_APP_ENV=alpha): 기본 ON
  *  - prod: OFF가 기본. 다음 중 하나로 ON 가능:
  *      · URL 쿼리 ?director=1   (이후 localStorage에 영속)
  *      · localStorage["ground-director"] === "1"
@@ -20,7 +21,8 @@ export function useDirectorMode(): boolean {
 
   useEffect(() => {
     const isDev = process.env.NODE_ENV !== "production";
-    let on = isDev;
+    const isAlpha = (process.env.NEXT_PUBLIC_APP_ENV ?? "").toLowerCase() === "alpha";
+    let on = isDev || isAlpha;
 
     try {
       const v = window.localStorage.getItem(KEY);

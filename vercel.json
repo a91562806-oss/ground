@@ -1,20 +1,28 @@
 {
   "crons": [
     {
-      "path": "/api/cron/notify",
-      "schedule": "0 5 * * *"
+      "path": "/api/cron/preview",
+      "schedule": "30 8 * * 1-5"
+    },
+    {
+      "path": "/api/cron/game-start",
+      "schedule": "15 9 * * 1-5"
     },
     {
       "path": "/api/cron/check-score",
-      "schedule": "10 6 * * *"
+      "schedule": "2 9 * * *"
     },
     {
-      "path": "/api/cron/check-lineup",
-      "schedule": "20 6 * * *"
+      "path": "/api/cron/live-events",
+      "schedule": "3 9 * * *"
     },
     {
-      "path": "/api/cron/pregame-preview",
-      "schedule": "30 8 * * 1-5"
+      "path": "/api/cron/postgame",
+      "schedule": "4 9 * * *"
+    },
+    {
+      "path": "/api/cron/check-highlight",
+      "schedule": "5 9 * * *"
     }
   ]
 }

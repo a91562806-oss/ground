@@ -69,8 +69,8 @@ export async function GET(req: Request) {
 
     let postGameReport: {
       status: "PENDING" | "GENERATING" | "READY" | "FAILED";
-      title: string | null;
-      lines: string[];
+      headline: string | null;
+      content: string | null;
       active: boolean;
       visibleUntil: string | null;
       generatedAt: string | null;
@@ -95,17 +95,19 @@ export async function GET(req: Request) {
           status: true,
           gameDate: true,
           title: true,
+          content: true,
           bodyLines: true,
           generatedAt: true,
         },
       });
       if (report) {
+        const fallbackContent = Array.isArray(report.bodyLines)
+          ? report.bodyLines.filter((line): line is string => typeof line === "string").join(" ")
+          : null;
         postGameReport = {
           status: report.status,
-          title: report.title,
-          lines: Array.isArray(report.bodyLines)
-            ? report.bodyLines.filter((line): line is string => typeof line === "string")
-            : [],
+          headline: report.title,
+          content: report.content ?? fallbackContent,
           active: report.gameDate ? isPostGameWindowActive(report.gameDate) : true,
           visibleUntil: report.gameDate ? postGameVisibleUntilKst(report.gameDate).toISOString() : null,
           generatedAt: report.generatedAt ? report.generatedAt.toISOString() : null,
@@ -124,17 +126,19 @@ export async function GET(req: Request) {
           status: true,
           gameDate: true,
           title: true,
+          content: true,
           bodyLines: true,
           generatedAt: true,
         },
       });
       if (latest?.gameDate && isPostGameWindowActive(latest.gameDate)) {
+        const fallbackContent = Array.isArray(latest.bodyLines)
+          ? latest.bodyLines.filter((line): line is string => typeof line === "string").join(" ")
+          : null;
         postGameReport = {
           status: latest.status,
-          title: latest.title,
-          lines: Array.isArray(latest.bodyLines)
-            ? latest.bodyLines.filter((line): line is string => typeof line === "string")
-            : [],
+          headline: latest.title,
+          content: latest.content ?? fallbackContent,
           active: true,
           visibleUntil: postGameVisibleUntilKst(latest.gameDate).toISOString(),
           generatedAt: latest.generatedAt ? latest.generatedAt.toISOString() : null,
