@@ -208,8 +208,11 @@ export default function SchedulePageClient({
     if (root && !rootRef.current) rootRef.current = root;
     if (!root) return;
 
+    let touchStartX = 0;
     let touchStartY = 0;
     let touchDeltaY = 0;
+    // 첫 N 픽셀로 가로/세로 의도 판별 — 가로면 PageShell drag 에 맡기고 본 핸들러 무시.
+    let axis: "x" | "y" | null = null;
 
     const onWheel = (e: WheelEvent) => {
       if (Math.abs(e.deltaY) < 8) return;
@@ -218,15 +221,29 @@ export default function SchedulePageClient({
     };
 
     const onTouchStart = (e: TouchEvent) => {
+      touchStartX = e.touches[0]?.clientX ?? 0;
       touchStartY = e.touches[0]?.clientY ?? 0;
       touchDeltaY = 0;
+      axis = null;
     };
     const onTouchMove = (e: TouchEvent) => {
-      const y = e.touches[0]?.clientY ?? touchStartY;
-      touchDeltaY = touchStartY - y;
+      const t = e.touches[0];
+      if (!t) return;
+      const dx = t.clientX - touchStartX;
+      const dy = t.clientY - touchStartY;
+      if (axis == null && Math.hypot(dx, dy) > 8) {
+        axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+      }
+      if (axis === "x") {
+        // 가로 스와이프 — PageShell 이 라우팅 처리.
+        return;
+      }
+      touchDeltaY = touchStartY - t.clientY;
+      // 세로 스냅 보존을 위해 default scroll 막음.
       e.preventDefault();
     };
     const onTouchEnd = () => {
+      if (axis !== "y") return;
       if (Math.abs(touchDeltaY) < 24) return;
       stepSection(touchDeltaY > 0 ? 1 : -1);
     };
@@ -290,36 +307,42 @@ function DaySection({
         : "text-white/45";
 
   return (
-    <div ref={sectionRef} className="px-7 pt-12">
-      <div className="mb-5">
-        <div className="mb-2 flex items-center gap-1.5 text-white/45">
+    <div ref={sectionRef} className="px-5 pt-10">
+      <div className="mb-4 px-2">
+        <div
+          className="mb-2 flex items-center gap-1.5 text-white/70 drop-shadow-md"
+          style={{ textShadow: "0 1px 4px rgba(0,0,0,0.4)" }}
+        >
           {section.badge === "PAST" && <ChevronUp size={12} strokeWidth={2.4} />}
           {(section.badge === "TOMORROW" || section.badge === "UPCOMING") && (
             <ChevronDown size={12} strokeWidth={2.4} />
           )}
           <span
             className="text-[10px] uppercase tracking-[0.3em]"
-            style={{ fontWeight: 600 }}
+            style={{ fontWeight: 700 }}
           >
             {section.badge}
           </span>
         </div>
         <h2
-          className={`text-[40px] leading-[0.95] tracking-tightest ${headingColor}`}
-          style={{ fontWeight: 900 }}
+          className={`text-[40px] leading-[0.95] tracking-tightest drop-shadow-md ${headingColor}`}
+          style={{
+            fontWeight: 900,
+            textShadow: "0 2px 12px rgba(0,0,0,0.5)",
+          }}
         >
           {section.dateLabel}
         </h2>
       </div>
 
-      <ul className="flex flex-col">
+      <ul className="flex flex-col gap-3">
         {section.games.map((g) => (
           <GameRow key={g.id} game={g} muted={muted} badge={section.badge} />
         ))}
         {section.games.length === 0 && (
           <li
-            className="py-10 text-center text-[11px] uppercase tracking-[0.3em] text-white/30"
-            style={{ fontWeight: 600 }}
+            className="rounded-2xl border border-white/10 bg-black/40 py-10 text-center text-[11px] uppercase tracking-[0.3em] text-white/50 backdrop-blur-md"
+            style={{ fontWeight: 700 }}
           >
             No games
           </li>
@@ -363,11 +386,14 @@ function GameRow({
   const venue = venueDisplayLines(game.stadium);
 
   return (
-    <li className="group flex items-start gap-5 py-5">
+    <li className="group flex items-start gap-5 rounded-2xl border border-white/10 bg-black/40 p-5 backdrop-blur-md backdrop-saturate-150 shadow-[0_8px_22px_rgba(0,0,0,0.35)]">
       <div className="w-24 shrink-0" title={game.stadium || undefined}>
         <span
-          className={`block tabular-nums text-[20px] leading-none tracking-tight ${text}`}
-          style={{ fontWeight: 800 }}
+          className={`block tabular-nums text-[20px] leading-none tracking-tight drop-shadow-md ${text}`}
+          style={{
+            fontWeight: 800,
+            textShadow: "0 1px 6px rgba(0,0,0,0.45)",
+          }}
         >
           {game.time}
         </span>
@@ -377,8 +403,11 @@ function GameRow({
         <div className="flex items-baseline justify-between gap-3">
           <div className="min-w-0 flex flex-1 flex-nowrap items-baseline gap-2 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <span
-              className={`shrink-0 whitespace-nowrap text-[18px] leading-none tracking-tight ${awayTeamColor}`}
-              style={{ fontWeight: 800 }}
+              className={`shrink-0 whitespace-nowrap text-[18px] leading-none tracking-tight drop-shadow-md ${awayTeamColor}`}
+              style={{
+                fontWeight: 900,
+                textShadow: "0 1px 6px rgba(0,0,0,0.45)",
+              }}
             >
               {away.short}
             </span>
@@ -386,40 +415,49 @@ function GameRow({
             {result ? (
               <>
                 <span
-                  className={`shrink-0 tabular-nums text-[16px] leading-none tracking-tight ${
-                    awayWon ? "text-white" : "text-white/45"
+                  className={`shrink-0 tabular-nums text-[16px] leading-none tracking-tight drop-shadow-md ${
+                    awayWon ? "text-white" : "text-white/55"
                   }`}
-                  style={{ fontWeight: 800 }}
+                  style={{
+                    fontWeight: 900,
+                    textShadow: "0 1px 6px rgba(0,0,0,0.45)",
+                  }}
                 >
                   {result.awayScore}
                 </span>
                 <span
-                  className="shrink-0 text-[10px] tracking-[0.3em] text-white/30"
-                  style={{ fontWeight: 600 }}
+                  className="shrink-0 text-[10px] tracking-[0.3em] text-white/45"
+                  style={{ fontWeight: 700 }}
                 >
                   {draw ? "D" : ":"}
                 </span>
                 <span
-                  className={`shrink-0 tabular-nums text-[16px] leading-none tracking-tight ${
-                    homeWon ? "text-white" : "text-white/45"
+                  className={`shrink-0 tabular-nums text-[16px] leading-none tracking-tight drop-shadow-md ${
+                    homeWon ? "text-white" : "text-white/55"
                   }`}
-                  style={{ fontWeight: 800 }}
+                  style={{
+                    fontWeight: 900,
+                    textShadow: "0 1px 6px rgba(0,0,0,0.45)",
+                  }}
                 >
                   {result.homeScore}
                 </span>
               </>
             ) : (
               <span
-                className="shrink-0 text-[10px] italic tracking-[0.3em] text-white/35"
-                style={{ fontWeight: 300 }}
+                className="shrink-0 text-[10px] italic tracking-[0.3em] text-white/50"
+                style={{ fontWeight: 400 }}
               >
                 vs
               </span>
             )}
 
             <span
-              className={`shrink-0 whitespace-nowrap text-[18px] leading-none tracking-tight ${homeTeamColor}`}
-              style={{ fontWeight: 800 }}
+              className={`shrink-0 whitespace-nowrap text-[18px] leading-none tracking-tight drop-shadow-md ${homeTeamColor}`}
+              style={{
+                fontWeight: 900,
+                textShadow: "0 1px 6px rgba(0,0,0,0.45)",
+              }}
             >
               {home.short}
             </span>

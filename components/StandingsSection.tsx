@@ -43,71 +43,69 @@ export default function StandingsSection({ myTeamId, rows, loading }: Props) {
   const showSkeleton = loading || data.length === 0;
 
   return (
-    <section
-      aria-label="KBO 순위표"
-      className="px-6 pt-9 pb-12"
-      style={{
-        // HeroCard 와의 톤 매칭 — 위쪽이 자연스럽게 어둡게 떨어짐
-        background:
-          "linear-gradient(180deg, rgba(0,0,0,0.0) 0%, rgba(0,0,0,0.0) 100%)",
-      }}
-    >
-      {/* ── 헤더 ── */}
-      <div className="mb-5 flex items-baseline justify-between">
-        <h2
-          className="text-[11px] uppercase tracking-[0.36em] text-white/55"
+    <section aria-label="KBO 순위표" className="px-5 pt-7 pb-12">
+      {/* ── 글래스 카드 컨테이너 ── */}
+      <div className="rounded-3xl border border-white/10 bg-black/40 p-5 shadow-[0_18px_44px_rgba(0,0,0,0.4)] backdrop-blur-xl backdrop-saturate-150">
+        {/* ── 헤더 ── */}
+        <div className="mb-5 flex items-baseline justify-between">
+          <h2
+            className="text-[11px] uppercase tracking-[0.36em] text-white drop-shadow-md"
+            style={{
+              fontWeight: 800,
+              textShadow: "0 1px 4px rgba(0,0,0,0.4)",
+            }}
+          >
+            Standings
+          </h2>
+          <span
+            className="text-[9.5px] uppercase tracking-[0.32em] text-white/55"
+            style={{ fontWeight: 600 }}
+          >
+            2026 Regular Season
+          </span>
+        </div>
+
+        {/* ── 컬럼 가이드 (한글 약식) ── */}
+        <div
+          className="mb-2 grid items-baseline gap-3 px-3 text-[10px] tracking-[0.05em] text-white/55"
+          style={{
+            fontWeight: 700,
+            gridTemplateColumns: STANDINGS_GRID,
+          }}
+        >
+          <span className="text-center">순위</span>
+          <span>팀</span>
+          <span className="text-right">승</span>
+          <span className="text-right">패</span>
+          <span className="text-right">무</span>
+          <span className="text-right">승률</span>
+          <span className="text-right">게임차</span>
+        </div>
+
+        {/* ── 본문 ── */}
+        {showSkeleton ? (
+          <SkeletonList />
+        ) : (
+          <ul role="list" className="flex flex-col">
+            {data.map((row, i) => (
+              <Row
+                key={row.teamId}
+                row={row}
+                isMe={row.teamId === myTeamId}
+                index={i}
+              />
+            ))}
+          </ul>
+        )}
+
+        {/* ── 풋터 ── */}
+        <p
+          className="mt-6 text-center text-[9.5px] uppercase tracking-[0.32em] text-white/40"
           style={{ fontWeight: 700 }}
         >
-          Standings
-        </h2>
-        <span
-          className="text-[9.5px] uppercase tracking-[0.32em] text-white/30"
-          style={{ fontWeight: 500 }}
-        >
-          2026 Regular Season
-        </span>
+          Source · Naver Sports
+        </p>
       </div>
-
-      {/* ── 컬럼 가이드 (한글 약식) ── */}
-      <div
-        className="mb-2 grid items-baseline gap-3 px-3 text-[10px] tracking-[0.05em] text-white/35"
-        style={{
-          fontWeight: 600,
-          gridTemplateColumns: STANDINGS_GRID,
-        }}
-      >
-        <span className="text-center">순위</span>
-        <span>팀</span>
-        <span className="text-right">승</span>
-        <span className="text-right">패</span>
-        <span className="text-right">무</span>
-        <span className="text-right">승률</span>
-        <span className="text-right">게임차</span>
-      </div>
-
-      {/* ── 본문 ── */}
-      {showSkeleton ? (
-        <SkeletonList />
-      ) : (
-        <ul role="list" className="flex flex-col">
-          {data.map((row, i) => (
-            <Row
-              key={row.teamId}
-              row={row}
-              isMe={row.teamId === myTeamId}
-              index={i}
-            />
-          ))}
-        </ul>
-      )}
-
-      {/* ── 풋터 ── */}
-      <p
-        className="mt-7 text-center text-[9.5px] uppercase tracking-[0.32em] text-white/25"
-        style={{ fontWeight: 600 }}
-      >
-        Source · Naver Sports
-      </p>
     </section>
   );
 }
@@ -137,8 +135,8 @@ function Row({
 
   const NUM_FONT =
     '"Pretendard Variable", "Helvetica Neue", Inter, sans-serif';
-  const numColor = isMe ? "rgba(255,255,255,0.92)" : "rgba(255,255,255,0.62)";
-  const subNumColor = isMe ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.30)";
+  const numColor = isMe ? "rgba(255,255,255,1)" : "rgba(255,255,255,0.78)";
+  const subNumColor = isMe ? "rgba(255,255,255,0.7)" : "rgba(255,255,255,0.42)";
 
   return (
     <li>
@@ -147,7 +145,8 @@ function Row({
         className="relative grid items-center gap-3 rounded-2xl px-3 py-3"
         style={{
           gridTemplateColumns: STANDINGS_GRID,
-          backgroundColor: isMe ? `${t.accent}1a` : "transparent",
+          backgroundColor: isMe ? `${t.accent}26` : "transparent",
+          border: isMe ? `1px solid ${t.accent}55` : "1px solid transparent",
         }}
       >
         {/* 응원팀: 좌측 얇은 컬러 바 + 안쪽 글로우 */}
@@ -157,7 +156,7 @@ function Row({
             className="pointer-events-none absolute inset-y-1 left-1 w-[2px] rounded-full"
             style={{
               backgroundColor: t.accent,
-              boxShadow: `0 0 10px ${t.accent}99`,
+              boxShadow: `0 0 12px ${t.accent}cc`,
             }}
           />
         )}
@@ -167,10 +166,12 @@ function Row({
           className="text-center tabular-nums"
           style={{
             fontFamily: NUM_FONT,
-            fontWeight: isMe ? 800 : 600,
-            fontSize: 13,
-            color: isMe ? "rgba(255,255,255,0.98)" : "rgba(255,255,255,0.55)",
-            textShadow: isMe ? `0 0 8px ${t.accent}66` : "none",
+            fontWeight: isMe ? 900 : 700,
+            fontSize: 14,
+            color: isMe ? "#ffffff" : "rgba(255,255,255,0.75)",
+            textShadow: isMe
+              ? `0 0 10px ${t.accent}aa, 0 1px 4px rgba(0,0,0,0.5)`
+              : "0 1px 3px rgba(0,0,0,0.35)",
             letterSpacing: "-0.01em",
           }}
         >
@@ -182,10 +183,13 @@ function Row({
           className="min-w-0 truncate"
           style={{
             fontFamily: NUM_FONT,
-            fontWeight: isMe ? 800 : 600,
+            fontWeight: isMe ? 900 : 700,
             fontSize: 14,
             letterSpacing: "-0.02em",
-            color: isMe ? "rgba(255,255,255,1)" : "rgba(255,255,255,0.88)",
+            color: isMe ? "#ffffff" : "rgba(255,255,255,0.95)",
+            textShadow: isMe
+              ? `0 1px 6px rgba(0,0,0,0.5)`
+              : "0 1px 3px rgba(0,0,0,0.35)",
           }}
         >
           {t.short}

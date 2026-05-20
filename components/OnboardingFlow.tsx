@@ -105,6 +105,26 @@ function darkenHex(hex: string, ratio: number): string {
   return `rgb(${clamp(rgb[0] * factor)}, ${clamp(rgb[1] * factor)}, ${clamp(rgb[2] * factor)})`;
 }
 
+/** YIQ 기반 대비 — 밝은 배경이면 어두운 텍스트, 어두운 배경이면 흰 텍스트 */
+function resolveTextOnBg(bgHex: string): string {
+  const rgb = hexToRgb(bgHex);
+  if (!rgb) return "#ffffff";
+  const yiq = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000;
+  return yiq >= 160 ? "#111111" : "#ffffff";
+}
+
+/**
+ * 흰 카드 위에 쓸 강조색 선택.
+ * accent(secondary)가 흰색/밝은 색이면 primary 를 대신 사용해 가독성 확보.
+ * (예: SSG secondary=#FFFFFF → primary #CE0E2D 로 폴백)
+ */
+function resolveCardAccent(primary: string, accent: string): string {
+  const rgb = hexToRgb(accent);
+  if (!rgb) return primary;
+  const yiq = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000;
+  return yiq > 230 ? primary : accent;
+}
+
 export default function OnboardingFlow({ onComplete }: Props) {
   const [step, setStep] = useState<1 | 2>(1);
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
@@ -237,6 +257,9 @@ export default function OnboardingFlow({ onComplete }: Props) {
   const themeBg = visualTheme?.primary ?? "#000000";
   const themeText = visualTheme?.text ?? "#ffffff";
   const themeAccent = visualTheme?.secondary ?? "#c30452";
+  // 흰 카드 위에서 사용할 안전한 강조색 (SSG처럼 secondary=white인 경우 primary로 폴백)
+  const cardAccent = resolveCardAccent(themeBg, themeAccent);
+  const cardAccentText = resolveTextOnBg(cardAccent);
   const slogan = selectedTeamId ? TEAM_SLOGANS[selectedTeamId] : null;
   const pinstripe =
     visualTheme?.pattern === "pinstripe-black"
@@ -321,8 +344,8 @@ export default function OnboardingFlow({ onComplete }: Props) {
                 <div
                   className="mx-auto mb-3 w-fit rounded-full px-3 py-1 text-sm font-bold"
                   style={{
-                    color: themeAccent,
-                    backgroundColor: `${themeAccent}33`,
+                    color: cardAccent,
+                    backgroundColor: `${cardAccent}22`,
                   }}
                 >
                   {slogan}
@@ -349,8 +372,8 @@ export default function OnboardingFlow({ onComplete }: Props) {
                 <motion.span
                   animate={{
                     scale: isPledgeChecked ? 1.06 : 1,
-                    backgroundColor: isPledgeChecked ? themeAccent : "rgba(255,255,255,0)",
-                    borderColor: isPledgeChecked ? themeAccent : "rgba(107,114,128,0.45)",
+                    backgroundColor: isPledgeChecked ? cardAccent : "rgba(255,255,255,0)",
+                    borderColor: isPledgeChecked ? cardAccent : "rgba(107,114,128,0.45)",
                   }}
                   transition={{ duration: 0.18 }}
                   className="mt-[1px] inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border"
@@ -375,9 +398,9 @@ export default function OnboardingFlow({ onComplete }: Props) {
                 disabled={loading || !isPledgeChecked}
                 className="mt-6 w-full rounded-2xl px-4 py-4 text-[14px] font-semibold tracking-wide transition disabled:cursor-not-allowed disabled:opacity-55"
                 style={{
-                  backgroundColor: themeAccent,
-                  color: "#ffffff",
-                  boxShadow: `0 10px 30px ${themeAccent}66`,
+                  backgroundColor: cardAccent,
+                  color: cardAccentText,
+                  boxShadow: `0 10px 30px ${cardAccent}55`,
                 }}
               >
                 {loading ? "설정 중..." : "편파 알림 켜고 시작하기"}
