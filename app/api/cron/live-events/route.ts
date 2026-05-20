@@ -20,6 +20,10 @@ type RelayInfo = {
   eventKinds: Array<"pitcherChange" | "strikeout">;
   /** 현재 공격 중인 팀 측 ("home" | "away" | null) */
   battingSide: "home" | "away" | null;
+  /** 현재 이닝 번호 (null=불명) */
+  inning: number | null;
+  /** 이닝 초/말 레이블 (예: "7회 초") */
+  inningLabel: string | null;
   eventKey: string;
 };
 
@@ -73,62 +77,40 @@ async function fetchRelayInfo(gameId: string): Promise<RelayInfo | null> {
       const entries = extractRelayEntries(json);
 
       if (entries.length > 0) {
-        // ★ 핵심 수정: 전체 히스토리 대신 최근 5개 엔트리만 검사
-        // 크론이 5분마다 돌므로 최근 5개면 충분히 커버됨
-        const recentEntries = entries.slice(-5);
-        const recentText = recentEntries.map((e) => e.text ?? "").join(" ");
+        // ★ 가장 최신 엔트리 1개만 검사 — 과거 히스토리 false positive 완전 차단
+        const lastEntry = entries[entries.length - 1];
+        const lastText = lastEntry.text ?? "";
 
         const eventKinds: Array<"pitcherChange" | "strikeout"> = [];
-        if (/투수\s*교체|투수교체/.test(recentText)) eventKinds.push("pitcherChange");
-        if (/삼진|탈삼진/.test(recentText)) eventKinds.push("strikeout");
+        if (/투수\s*교체|투수교체/.test(lastText)) eventKinds.push("pitcherChange");
+        if (/삼진|탈삼진/.test(lastText)) eventKinds.push("strikeout");
         if (eventKinds.length === 0) return null;
 
-        // 이벤트 키: 마지막 엔트리의 seqNo + 텍스트 앞 60자 (중복 방지)
-        const lastEntry = recentEntries[recentEntries.length - 1];
-        const seqId = lastEntry.seqNo != null ? String(lastEntry.seqNo) : recentText.slice(0, 60);
+        // 이벤트 키: seqNo 기반 (없으면 텍스트 앞 60자)
+        const seqId = lastEntry.seqNo != null ? String(lastEntry.seqNo) : lastText.slice(0, 60);
         const eventKey = `seq:${seqId}`;
 
-        // 이닝 초/말은 최신 엔트리 기준
-        const battingSide = resolveInningSideFromEntries(recentEntries, json);
+        // 이닝 정보
+        const inning = typeof lastEntry.inning === "number" ? lastEntry.inning : null;
+        const inningSub = lastEntry.inningSub ?? null;
+        let battingSide: "home" | "away" | null = null;
+        if (inningSub === "1" || inningSub === 1) battingSide = "away";
+        else if (inningSub === "2" || inningSub === 2) battingSide = "home";
+        else battingSide = resolveInningSide(json);
 
-        return { eventKinds, battingSide, eventKey };
+        const halfLabel = battingSide === "away" ? "초" : battingSide === "home" ? "말" : null;
+        const inningLabel = inning != null && halfLabel ? `${inning}회 ${halfLabel}` : null;
+
+        return { eventKinds, battingSide, inning, inningLabel, eventKey };
       }
 
-      // entries 배열 추출 실패 시 — 전체 JSON fallback (legacy)
-      // 이 경우 dedup key를 충분히 촘촘하게 잡아 과거 중복 방지
-      const fullText = JSON.stringify(json);
-      const eventKinds: Array<"pitcherChange" | "strikeout"> = [];
-
-      // 최근 중계 텍스트만 추출 시도 (last 200 chars of json may include recent text)
-      // 이 경로에선 false positive 가능성이 있으므로 이벤트 감지를 건너뜀
-      if (eventKinds.length === 0) {
-        // entries 파싱 실패 + 배열 없음 = 이 endpoint는 포기
-        continue;
-      }
-
-      const battingSide = resolveInningSide(json);
-      return { eventKinds, battingSide, eventKey: fullText.slice(0, 160) };
+      // entries 배열 파싱 실패 — 이 endpoint 포기, false positive 방지를 위해 skip
+      continue;
     } catch {
       // ignore, try next endpoint
     }
   }
   return null;
-}
-
-/**
- * 최신 릴레이 엔트리 배열과 루트 JSON 에서 이닝 초/말을 추출.
- */
-function resolveInningSideFromEntries(
-  recentEntries: RelayEntry[],
-  rootJson: Record<string, unknown>,
-): "home" | "away" | null {
-  // 1) 최신 엔트리의 inningSub 우선
-  for (const entry of [...recentEntries].reverse()) {
-    if (entry.inningSub === "1" || entry.inningSub === 1) return "away";
-    if (entry.inningSub === "2" || entry.inningSub === 2) return "home";
-  }
-  // 2) 루트 JSON fallback
-  return resolveInningSide(rootJson);
 }
 
 /**
@@ -161,58 +143,52 @@ function resolveInningSide(json: Record<string, unknown>): "home" | "away" | nul
 
 /**
  * 공수(攻守) 관점에 맞는 알림 문구 생성.
- *
- * @param kind       이벤트 종류
- * @param myTeamShort   수신자 응원팀 약칭
- * @param oppTeamShort  상대팀 약칭
- * @param isPitching    수신자 팀이 현재 수비(투구) 중이면 true
+ * 모든 body 앞에 "[X회 초/말]" 이닝 레이블을 포함.
  */
 function buildLiveEventCopy(
   kind: "pitcherChange" | "strikeout",
   myTeamShort: string,
   oppTeamShort: string,
   isPitching: boolean | null,
+  inningLabel: string | null,
 ): { title: string; body: string } {
+  const inning = inningLabel ? `[${inningLabel}] ` : "";
+
   if (kind === "strikeout") {
     if (isPitching === true) {
-      // 내 팀 투수가 삼진 잡음 🎉
       return {
         title: "⚡ 탈삼진!",
-        body: `${myTeamShort} 투수 방금 삼진 잡았다! 이 기세 그대로 가자.`,
+        body: `${inning}${myTeamShort} 투수 방금 삼진 잡았다! 이 기세 그대로 가자.`,
       };
     }
     if (isPitching === false) {
-      // 내 팀 타자가 삼진 당함 😤
       return {
         title: "⚡ 삼진 아웃",
-        body: `${myTeamShort} 타자 삼진 아웃... 다음 타자가 살려줘.`,
+        body: `${inning}${myTeamShort} 타자 삼진 아웃... 다음 타자가 살려줘.`,
       };
     }
-    // 공수 불명 — 중립
     return {
       title: "⚡ 라이브 경기 상황",
-      body: `${myTeamShort}-${oppTeamShort}전, 방금 탈삼진 발생.`,
+      body: `${inning}${myTeamShort}-${oppTeamShort}전 탈삼진 발생.`,
     };
   }
 
   // pitcherChange
   if (isPitching === true) {
-    // 내 팀이 투수 교체 단행
     return {
       title: "🎯 투수 교체",
-      body: `${myTeamShort} 투수 교체. 이 위기 막아야 한다.`,
+      body: `${inning}${myTeamShort} 투수 교체. 이 위기 막아야 한다.`,
     };
   }
   if (isPitching === false) {
-    // 상대 팀이 투수 교체
     return {
       title: "🎯 상대 투수 교체",
-      body: `상대가 투수 교체했다. ${myTeamShort}, 지금이 찬스다!`,
+      body: `${inning}상대가 투수 교체했다. ${myTeamShort}, 지금이 찬스다!`,
     };
   }
   return {
     title: "🎯 라이브 경기 상황",
-    body: `${myTeamShort}-${oppTeamShort}전, 투수 교체 발생.`,
+    body: `${inning}${myTeamShort}-${oppTeamShort}전 투수 교체 발생.`,
   };
 }
 
@@ -261,6 +237,7 @@ export async function GET(req: Request) {
           findTeam(teamId).short,
           findTeam(opponentTeamId).short,
           isPitching,
+          relay.inningLabel,
         );
 
         const result = await sendTeamTopicNotification({
