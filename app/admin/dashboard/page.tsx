@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { findTeam, TEAMS } from "@/lib/teams";
+import PendingNotificationsSection from "./PendingNotificationsSection";
 
 export const dynamic = "force-dynamic";
 
@@ -72,7 +73,7 @@ export default async function AdminDashboardPage({ searchParams }: Props) {
 
   const todayStart = startOfTodayKst();
 
-  const [totalUsers, teamRows, todaysTriggers, todayNotifications] = await Promise.all([
+  const [totalUsers, teamRows, todaysTriggers, todayNotifications, pendingNotifications] = await Promise.all([
     db.user.count({
       where: {
         pushSubscriptions: {
@@ -119,6 +120,21 @@ export default async function AdminDashboardPage({ searchParams }: Props) {
         },
       },
       take: 3000,
+    }),
+    db.pendingPushNotification.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      select: {
+        id: true,
+        teamId: true,
+        topicKey: true,
+        title: true,
+        body: true,
+        url: true,
+        type: true,
+        status: true,
+        createdAt: true,
+      },
     }),
   ]);
 
@@ -270,6 +286,14 @@ export default async function AdminDashboardPage({ searchParams }: Props) {
             </ul>
           )}
         </div>
+
+        <PendingNotificationsSection
+          initialItems={pendingNotifications.map((n: any) => ({
+            ...n,
+            createdAt: n.createdAt.toISOString(),
+          }))}
+          adminKey={key!}
+        />
 
         <div className="mt-8 rounded-2xl border border-white/10 bg-slate-900/60 p-5">
           <h2 className="text-lg font-semibold tracking-tight text-white">오늘 발송 알럿 히스토리</h2>

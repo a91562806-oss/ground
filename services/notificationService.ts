@@ -98,7 +98,11 @@ export async function markDispatchOnce(input: {
 
 const PUSH_FAIL_DISABLE_STATUSES = new Set([401, 403, 404, 410]);
 
-export async function sendTeamTopicNotification(input: {
+/**
+ * 실제 FCM 발송 로직 (alpha guard 없음 — 호출 전에 guard 해야 함).
+ * sendTeamTopicNotification 과 deliverQueuedNotification 두 곳에서 공유.
+ */
+async function _doDeliverPush(input: {
   teamId: string;
   topicKey: TopicKey;
   title: string;
@@ -108,12 +112,6 @@ export async function sendTeamTopicNotification(input: {
   type: "GAME_START" | "GAME_RESULT" | "SCORE_UPDATE" | "SYSTEM";
   origin: string;
 }): Promise<{ sent: number; disabled: number; inboxCreated: number }> {
-  // 안전장치: 알파에서는 실 사용자에게 절대 보내지 않는다 (실수 방지).
-  // 그래도 강제로 보내고 싶을 때만 `ALPHA_ALLOW_REAL_PUSH=1` 으로 해제.
-  if (isAlphaServerEnv() && process.env.ALPHA_ALLOW_REAL_PUSH !== "1") {
-    return { sent: 0, disabled: 0, inboxCreated: 0 };
-  }
-
   const rawSubs = await prisma.pushSubscription.findMany({
     where: {
       enabled: true,
@@ -181,4 +179,82 @@ export async function sendTeamTopicNotification(input: {
   }
 
   return { sent: sentRows.length, disabled, inboxCreated };
+}
+
+/**
+ * 크론/이벤트 감지 코드가 호출하는 공개 API.
+ *
+ * AUTO_CONFIRM_PUSH=true  → 즉시 FCM 발송 (기존 동작)
+ * AUTO_CONFIRM_PUSH=false → DB에 PENDING 저장 후 어드민 승인 대기
+ *
+ * alpha 환경 안전장치는 항상 적용: ALPHA_ALLOW_REAL_PUSH=1 이 아니면 실 발송 차단.
+ */
+export async function sendTeamTopicNotification(input: {
+  teamId: string;
+  topicKey: TopicKey;
+  title: string;
+  body: string;
+  url: string;
+  payload: Prisma.InputJsonValue;
+  type: "GAME_START" | "GAME_RESULT" | "SCORE_UPDATE" | "SYSTEM";
+  origin: string;
+}): Promise<{ sent: number; disabled: number; inboxCreated: number; queued?: number }> {
+  // alpha 안전장치
+  if (isAlphaServerEnv() && process.env.ALPHA_ALLOW_REAL_PUSH !== "1") {
+    return { sent: 0, disabled: 0, inboxCreated: 0 };
+  }
+
+  // AUTO_CONFIRM_PUSH=true 이면 즉시 발송, false(또는 미설정)면 PENDING 저장
+  const autoConfirm = process.env.AUTO_CONFIRM_PUSH === "true";
+
+  if (!autoConfirm) {
+    await prisma.pendingPushNotification.create({
+      data: {
+        teamId: input.teamId,
+        topicKey: input.topicKey,
+        title: input.title,
+        body: input.body,
+        url: input.url,
+        type: input.type,
+        payload: input.payload as Prisma.InputJsonValue,
+        status: "PENDING",
+      },
+    });
+    return { sent: 0, disabled: 0, inboxCreated: 0, queued: 1 };
+  }
+
+  return _doDeliverPush(input);
+}
+
+/**
+ * 어드민 대시보드에서 PENDING 알림을 승인할 때 사용.
+ * AUTO_CONFIRM_PUSH 분기를 우회하고 실제 FCM 발송 후 상태를 SENT 로 업데이트.
+ */
+export async function deliverQueuedNotification(
+  pendingId: string,
+  origin: string
+): Promise<{ sent: number; disabled: number; inboxCreated: number; error?: string }> {
+  const pending = await prisma.pendingPushNotification.findUnique({ where: { id: pendingId } });
+  if (!pending) return { sent: 0, disabled: 0, inboxCreated: 0, error: "not_found" };
+  if (pending.status !== "PENDING") {
+    return { sent: 0, disabled: 0, inboxCreated: 0, error: `already_${pending.status.toLowerCase()}` };
+  }
+
+  const result = await _doDeliverPush({
+    teamId: pending.teamId,
+    topicKey: pending.topicKey as TopicKey,
+    title: pending.title,
+    body: pending.body,
+    url: pending.url,
+    type: pending.type as "GAME_START" | "GAME_RESULT" | "SCORE_UPDATE" | "SYSTEM",
+    payload: (pending.payload ?? {}) as Prisma.InputJsonValue,
+    origin,
+  });
+
+  await prisma.pendingPushNotification.update({
+    where: { id: pendingId },
+    data: { status: "SENT", sentAt: new Date(), sentCount: result.sent },
+  });
+
+  return result;
 }

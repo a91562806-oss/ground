@@ -23,6 +23,12 @@ enum GameStatus {
   CANCEL
 }
 
+enum PendingPushStatus {
+  PENDING
+  SENT
+  REJECTED
+}
+
 enum PostGameReportStatus {
   PENDING
   GENERATING
@@ -145,6 +151,31 @@ model PostGameReport {
   @@unique([externalId, teamId])
   @@index([teamId, gameDate])
   @@index([status, updatedAt])
+}
+
+/**
+ * 관리자 승인 대기 중인 푸시 알림.
+ * AUTO_CONFIRM_PUSH=false 일 때 sendTeamTopicNotification 호출 시 즉시 발송 대신 여기에 저장.
+ * 어드민이 Approve 하면 실 FCM 발송 후 status → SENT.
+ */
+model PendingPushNotification {
+  id        String            @id @default(cuid())
+  teamId    String
+  topicKey  String
+  title     String
+  body      String
+  url       String
+  type      String
+  payload   Json?
+  status    PendingPushStatus @default(PENDING)
+  sentCount Int?
+  sentAt    DateTime?
+  rejectedAt DateTime?
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  @@index([status, createdAt(sort: Desc)])
+  @@index([teamId, createdAt(sort: Desc)])
 }
 
 model PregamePreview {
