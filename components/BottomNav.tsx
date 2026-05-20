@@ -35,12 +35,11 @@ export default function BottomNav() {
         }}
       />
       <div
-        className="backdrop-blur-md"
+        className="backdrop-blur-xl backdrop-saturate-150"
         style={{
-          backgroundColor:
-            "color-mix(in srgb, var(--app-text, #ffffff) 20%, transparent)",
+          backgroundColor: "rgba(0, 0, 0, 0.4)",
           color: "var(--app-text, #ffffff)",
-          borderTop: "1px solid color-mix(in srgb, var(--app-text, #ffffff) 18%, transparent)",
+          borderTop: "1px solid rgba(255, 255, 255, 0.1)",
         }}
       >
         <ul className="mx-auto flex max-w-md items-stretch justify-around px-6 pb-6 pt-3 safe-pb">
@@ -62,23 +61,27 @@ export default function BottomNav() {
                   >
                     <Icon
                       size={22}
-                      strokeWidth={active ? 2.3 : 1.7}
+                      strokeWidth={active ? 2.4 : 1.8}
                       className="text-white"
                       style={
                         active
                           ? {
-                              color: "var(--app-text, #ffffff)",
-                              filter: `drop-shadow(0 0 8px ${accent}55)`,
+                              color: "#ffffff",
+                              filter: `drop-shadow(0 0 10px ${accent}88) drop-shadow(0 1px 4px rgba(0,0,0,0.5))`,
                             }
-                          : { color: "var(--app-text, #ffffff)" }
+                          : {
+                              color: "#ffffff",
+                              filter: "drop-shadow(0 1px 4px rgba(0,0,0,0.45))",
+                            }
                       }
                     />
                     <span
-                      className="text-[9.5px] tracking-[0.22em] text-white"
+                      className="text-[9.5px] tracking-[0.22em] text-white drop-shadow-md"
                       style={{
-                        color: "var(--app-text, #ffffff)",
-                        opacity: active ? 1 : 0.65,
-                        fontWeight: active ? 700 : 400,
+                        color: "#ffffff",
+                        opacity: active ? 1 : 0.7,
+                        fontWeight: active ? 800 : 600,
+                        textShadow: "0 1px 4px rgba(0,0,0,0.5)",
                       }}
                     >
                       {label}
