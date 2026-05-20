@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { Cormorant_Garamond } from "next/font/google";
-import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { useEffect, useMemo, useState } from "react";
+import { motion } from "framer-motion";
 import { CloudRain, User } from "lucide-react";
 import { findTeam, heroLeftEpithetLabel, type Team } from "@/lib/teams";
 import {
@@ -13,6 +13,8 @@ import {
 } from "@/config/teams";
 import NotificationBell from "@/components/NotificationBell";
 import ShareButton from "@/components/ShareButton";
+import InsightOverlay from "@/components/today/InsightOverlay";
+import LineupSheet from "@/components/today/LineupSheet";
 import { useWeather, type WeatherInfo } from "@/lib/useWeather";
 import { useKboToday } from "@/lib/useKboToday";
 import { getTeamGame, starterLabel, type LineupItem, type LiveGame } from "@/lib/kbo";
@@ -132,6 +134,18 @@ function formatCountdownHms(totalSeconds: number): string {
   return `${pad2(h)}:${pad2(m)}:${pad2(s)}`;
 }
 
+function formatVisibleUntilKst(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const kst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
+  const month = kst.getUTCMonth() + 1;
+  const day = kst.getUTCDate();
+  const hh = String(kst.getUTCHours()).padStart(2, "0");
+  const mm = String(kst.getUTCMinutes()).padStart(2, "0");
+  return `${month}/${day} ${hh}:${mm}까지`;
+}
+
 function hexToRgb(hex: string): [number, number, number] | null {
   const normalized = hex.trim().replace("#", "");
   if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return null;
@@ -158,15 +172,8 @@ function resolveButtonTextColor(bgHex: string): string {
   return yiq >= 160 ? "#111111" : "#ffffff";
 }
 
-type FloatingChat = {
-  id: string;
-  text: string;
-  leftPct: number;
-  topPct: number;
-  ttlMs: number;
-};
-
-const MAX_FLOATING_CHATS = 50;
+const PREVIEW_DISMISS_KEY = "ground-pregame-preview-dismiss";
+const POSTGAME_DISMISS_KEY = "ground-postgame-report-dismiss";
 
 export default function HeroCard({ team }: Props) {
   // ── 라이브 KBO 데이터 (60s 폴링, 실패 시 폴백) ──
@@ -236,10 +243,82 @@ export default function HeroCard({ team }: Props) {
     showHeroCountdown && gameStartMs != null
       ? formatCountdownHms(Math.floor((gameStartMs - nowMs) / 1000))
       : null;
+  const pregamePreview = live?.pregamePreview ?? null;
+  const previewDateKey = live?.date ?? "";
+  const previewDismissKey = `${team.id}:${previewDateKey}`;
+  const [isPregamePreviewDismissed, setIsPregamePreviewDismissed] = useState(false);
+  const showPregamePreview =
+    Boolean(match) &&
+    live?.gamePhase === "PRE" &&
+    Boolean(pregamePreview?.active) &&
+    !isPregamePreviewDismissed;
+  const postGameReport = live?.postGameReport ?? null;
+  const postGameDismissKey = `${team.id}:${live?.date ?? ""}`;
+  const [isPostGameReportDismissed, setIsPostGameReportDismissed] = useState(false);
+  const showPostGameReport = Boolean(postGameReport?.active);
+  const postGameVisibleUntilLabel = formatVisibleUntilKst(postGameReport?.visibleUntil);
 
-  const [chatInput, setChatInput] = useState("");
-  const [floatingChats, setFloatingChats] = useState<FloatingChat[]>([]);
-  const timersRef = useRef<number[]>([]);
+  useEffect(() => {
+    if (!previewDateKey) return;
+    try {
+      const raw = localStorage.getItem(PREVIEW_DISMISS_KEY);
+      if (!raw) {
+        setIsPregamePreviewDismissed(false);
+        return;
+      }
+      const parsed = JSON.parse(raw) as Record<string, boolean>;
+      setIsPregamePreviewDismissed(Boolean(parsed[previewDismissKey]));
+    } catch {
+      setIsPregamePreviewDismissed(false);
+    }
+  }, [previewDateKey, previewDismissKey]);
+
+  function dismissPregamePreviewForToday() {
+    try {
+      const raw = localStorage.getItem(PREVIEW_DISMISS_KEY);
+      const parsed = raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
+      parsed[previewDismissKey] = true;
+      localStorage.setItem(PREVIEW_DISMISS_KEY, JSON.stringify(parsed));
+    } catch {
+      // ignore
+    }
+    setIsPregamePreviewDismissed(true);
+  }
+
+  useEffect(() => {
+    if (!live?.date) return;
+    try {
+      const raw = localStorage.getItem(POSTGAME_DISMISS_KEY);
+      if (!raw) {
+        setIsPostGameReportDismissed(false);
+        return;
+      }
+      const parsed = JSON.parse(raw) as Record<string, boolean>;
+      setIsPostGameReportDismissed(Boolean(parsed[postGameDismissKey]));
+    } catch {
+      setIsPostGameReportDismissed(false);
+    }
+  }, [live?.date, postGameDismissKey]);
+
+  function dismissPostGameReportForToday() {
+    try {
+      const raw = localStorage.getItem(POSTGAME_DISMISS_KEY);
+      const parsed = raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
+      parsed[postGameDismissKey] = true;
+      localStorage.setItem(POSTGAME_DISMISS_KEY, JSON.stringify(parsed));
+    } catch {
+      // ignore
+    }
+    setIsPostGameReportDismissed(true);
+  }
+
+  const activeInsightOverlay =
+    showPostGameReport && !isPostGameReportDismissed
+      ? { kind: "postgame" as const }
+      : showPregamePreview
+        ? { kind: "pregame" as const }
+        : null;
+
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
   const [keyboardInsetPx, setKeyboardInsetPx] = useState(0);
   const [isLineupOpen, setIsLineupOpen] = useState(false);
@@ -284,15 +363,6 @@ export default function HeroCard({ team }: Props) {
   }, [hasSelectedTeamLineup]);
 
   useEffect(() => {
-    return () => {
-      for (const t of timersRef.current) {
-        window.clearTimeout(t);
-      }
-      timersRef.current = [];
-    };
-  }, []);
-
-  useEffect(() => {
     document.documentElement.style.setProperty("--app-bg", lockedTheme.primary);
     document.documentElement.style.setProperty("--app-text", lockedTheme.text);
     document.documentElement.style.setProperty("--app-accent", lockedTheme.secondary);
@@ -302,50 +372,6 @@ export default function HeroCard({ team }: Props) {
       document.documentElement.style.setProperty("--app-accent", "#c30452");
     };
   }, [lockedTheme.primary, lockedTheme.secondary, lockedTheme.text]);
-
-  function spawnFloatingChat(raw: string) {
-    const text = raw.trim();
-    if (!text) return;
-    const id =
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const ttlMs = 5000 + Math.floor(Math.random() * 3000); // 5~8초
-    const leftPct = 6 + Math.random() * 88;
-    // 모바일 시선 흐름상 하단 근처(입력창 위)에서 먼저 보이게 배치
-    const topPct = 46 + Math.random() * 22;
-    setFloatingChats((prev) => {
-      const next = [...prev, { id, text, leftPct, topPct, ttlMs }];
-      return next.length > MAX_FLOATING_CHATS
-        ? next.slice(next.length - MAX_FLOATING_CHATS)
-        : next;
-    });
-    const tid = window.setTimeout(() => {
-      setFloatingChats((prev) => prev.filter((c) => c.id !== id));
-      timersRef.current = timersRef.current.filter((x) => x !== tid);
-    }, ttlMs);
-    timersRef.current.push(tid);
-  }
-
-  function onChatSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    submitChat();
-  }
-
-  function submitChat() {
-    const next = chatInput.trim();
-    if (!next) return false;
-    spawnFloatingChat(next);
-    setChatInput("");
-    return true;
-  }
-
-  function onChatInputKeyDown(e: KeyboardEvent<HTMLInputElement>) {
-    if (e.key !== "Enter") return;
-    if (e.nativeEvent.isComposing) return;
-    e.preventDefault();
-    submitChat();
-  }
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -379,13 +405,6 @@ export default function HeroCard({ team }: Props) {
       );
     };
   }, []);
-
-  function lockViewportOnInputFocus() {
-    if (typeof window === "undefined") return;
-    window.scrollTo(0, 0);
-    document.body.scrollTop = 0;
-    document.documentElement.scrollTop = 0;
-  }
 
   /** 응원팀(team) 항상 좌측, 상대 우측 */
   const heroMatch = useMemo(() => {
@@ -466,30 +485,6 @@ export default function HeroCard({ team }: Props) {
           }}
         />
       )}
-      {/* 상단 플로팅 채팅 버블 — 잠깐 떠 있다가 사라진다. */}
-      <div className="pointer-events-none absolute inset-0 z-40">
-        {floatingChats.map((msg) => (
-          <motion.div
-            key={msg.id}
-            initial={{ opacity: 0, y: 14, scale: 0.97 }}
-            animate={{
-              opacity: [0, 0.96, 0.92, 0],
-              y: [14, 2, -16, -36],
-              scale: [0.97, 1, 1, 0.99],
-            }}
-            transition={{
-              duration: msg.ttlMs / 1000,
-              ease: "easeOut",
-              times: [0, 0.16, 0.72, 1],
-            }}
-            className="absolute max-w-[88vw] -translate-x-1/2 rounded-2xl border border-white/18 bg-black/55 px-4 py-2.5 text-[13px] leading-snug text-white/92 shadow-[0_12px_30px_rgba(0,0,0,0.35)] backdrop-blur-md sm:max-w-[70vw]"
-            style={{ left: `${msg.leftPct}%`, top: `${msg.topPct}%` }}
-          >
-            {msg.text}
-          </motion.div>
-        ))}
-      </div>
-
       {/*
         하단 웅장한 암부 그라데이션 — 패널 없이 텍스트만 얹어도 대비 확보.
       */}
@@ -560,6 +555,23 @@ export default function HeroCard({ team }: Props) {
       >
         <NotificationBell accent={accentColor} iconColor={themedText(0.98)} />
       </motion.div>
+
+      {activeInsightOverlay?.kind === "pregame" ? (
+        <InsightOverlay
+          kind="pregame"
+          pregamePreview={pregamePreview}
+          onDismiss={dismissPregamePreviewForToday}
+        />
+      ) : activeInsightOverlay?.kind === "postgame" ? (
+        <InsightOverlay
+          kind="postgame"
+          postGameReport={postGameReport}
+          postGameVisibleUntilLabel={postGameVisibleUntilLabel}
+          onDismiss={dismissPostGameReportForToday}
+        />
+      ) : (
+        <InsightOverlay kind={null} />
+      )}
 
       {/* ── 경기 없음: 하단 그라데이션 위 중앙 스택 (글래스 없음) ── */}
       {!match && (
@@ -907,145 +919,15 @@ export default function HeroCard({ team }: Props) {
           </div>
         </motion.div>
       )}
-      {match && heroMatch && (
-        <form
-          onSubmit={onChatSubmit}
-          className="absolute inset-x-0 bottom-[calc(5.75rem+env(safe-area-inset-bottom,0px))] z-[60] mx-auto w-[min(94vw,760px)] px-2"
-          style={{
-            bottom: isKeyboardOpen
-              ? `calc(env(safe-area-inset-bottom,0px) + ${10 + keyboardInsetPx}px)`
-              : "calc(5.75rem + env(safe-area-inset-bottom,0px))",
-            maxWidth: "760px",
-          }}
-        >
-          <label htmlFor="today-float-chat" className="sr-only">
-            플로팅 채팅 입력
-          </label>
-          <div
-            className="pointer-events-auto flex items-center gap-2 rounded-2xl border px-3 py-2 backdrop-blur-md"
-            style={{
-              borderColor: `${accentColor}66`,
-              backgroundColor: isLightThemeText
-                ? "rgba(255,255,255,0.62)"
-                : "rgba(0,0,0,0.45)",
-            }}
-          >
-            <input
-              id="today-float-chat"
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              onFocus={lockViewportOnInputFocus}
-              onKeyDown={onChatInputKeyDown}
-              placeholder="응원 한마디를 남겨보세요."
-              maxLength={80}
-              className="min-w-0 flex-1 bg-transparent text-[16px] text-white/90 placeholder:text-white/38 focus:outline-none md:text-[13px]"
-              style={{
-                color: themedText(0.92),
-                caretColor: accentColor,
-              }}
-            />
-            <button
-              type="button"
-              onClick={submitChat}
-              className="rounded-lg px-3 py-1.5 text-[11px] font-semibold tracking-wide transition hover:brightness-105 active:scale-95"
-              style={{
-                backgroundColor: `${accentColor}26`,
-                border: `1px solid ${accentColor}66`,
-                color: themedText(0.92),
-              }}
-            >
-              SEND
-            </button>
-          </div>
-        </form>
-      )}
-      <AnimatePresence>
-        {isLineupOpen && hasSelectedTeamLineup && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.2, ease }}
-            className="absolute inset-0 z-[90]"
-          >
-            <button
-              type="button"
-              aria-label="라인업 모달 닫기"
-              onClick={() => setIsLineupOpen(false)}
-              className="absolute inset-0 bg-black/45"
-            />
-            <motion.div
-              initial={{ y: "100%" }}
-              animate={{ y: 0 }}
-              exit={{ y: "100%" }}
-              transition={{ duration: 0.28, ease }}
-              className="absolute inset-x-0 bottom-0 mx-auto w-full max-w-md rounded-t-3xl border border-white/15 p-4 pb-6 shadow-[0_-14px_44px_rgba(0,0,0,0.45)] backdrop-blur-lg"
-              style={{
-                height: "68%",
-                backgroundColor: isLightThemeText
-                  ? "rgba(255,255,255,0.8)"
-                  : "rgba(0,0,0,0.8)",
-              }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-gray-400/70" />
-              <div className="flex items-center justify-between">
-                <p
-                  className="text-[14px] font-semibold tracking-wide"
-                  style={{ color: themedText(0.95) }}
-                >
-                  {team.short} 선발 라인업
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setIsLineupOpen(false)}
-                  className="rounded-full border border-white/15 px-2.5 py-1 text-[11px]"
-                  style={{ color: themedText(0.75) }}
-                >
-                  닫기
-                </button>
-              </div>
-              <div className="mt-3 h-[calc(100%-3.5rem)] overflow-y-auto overscroll-contain pr-1 [-webkit-overflow-scrolling:touch]">
-                <ul className="space-y-2.5">
-                  {selectedTeamLineup.map((player) => (
-                    <li
-                      key={`${player.order}-${player.name}`}
-                      className="flex items-center justify-between rounded-xl border border-white/10 px-3 py-2.5"
-                      style={{
-                        backgroundColor: isLightThemeText
-                          ? "rgba(255,255,255,0.62)"
-                          : "rgba(255,255,255,0.06)",
-                      }}
-                    >
-                      <div className="flex items-center gap-3">
-                        <span
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[11px] font-bold"
-                          style={{
-                            backgroundColor: `${accentColor}26`,
-                            color: accentColor,
-                            border: `1px solid ${accentColor}66`,
-                          }}
-                        >
-                          {player.order}
-                        </span>
-                        <span
-                          className="text-[13px] font-semibold tracking-wide"
-                          style={{ color: themedText(0.92) }}
-                        >
-                          {player.name}
-                        </span>
-                      </div>
-                      <span className="text-[11px] tracking-wide" style={{ color: themedText(0.62) }}>
-                        {player.position}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <LineupSheet
+        open={isLineupOpen && hasSelectedTeamLineup}
+        onClose={() => setIsLineupOpen(false)}
+        teamShort={team.short}
+        lineup={selectedTeamLineup}
+        accentColor={accentColor}
+        isLightThemeText={isLightThemeText}
+        themedText={themedText}
+      />
     </div>
   );
 }

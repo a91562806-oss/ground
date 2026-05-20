@@ -23,6 +23,34 @@ enum GameStatus {
   CANCEL
 }
 
+enum PostGameReportStatus {
+  PENDING
+  GENERATING
+  READY
+  FAILED
+}
+
+enum PregamePreviewStatus {
+  PENDING
+  READY
+  FAILED
+}
+
+model NotificationDispatchState {
+  id          String   @id @default(cuid())
+  alertKind   String
+  teamScope   String
+  eventKey    String
+  gameExternalId String?
+  payload     Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([alertKind, teamScope, eventKey])
+  @@index([gameExternalId, alertKind, createdAt])
+  @@index([alertKind, createdAt])
+}
+
 model User {
   id                String             @id @default(cuid())
   email             String?            @unique
@@ -86,10 +114,57 @@ model Game {
   gameDate    DateTime?
   startedAt   DateTime?
   endedAt     DateTime?
+  highlightNotifiedAt DateTime?
+  highlightVideoUrl   String?
+  lastHighlightCheckedAt DateTime?
+  lastScoreAlertKey String?
+  lastScoreAlertAt  DateTime?
   lastSyncedAt DateTime  @default(now())
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 
   @@index([status, updatedAt])
   @@index([homeTeam, awayTeam])
+}
+
+model PostGameReport {
+  id         String               @id @default(cuid())
+  externalId String
+  teamId     String
+  gameDate   DateTime?
+  status     PostGameReportStatus @default(PENDING)
+  title      String?
+  content    String?
+  bodyLines  Json?
+  facts      Json?
+  error      String?
+  generatedAt DateTime?
+  createdAt  DateTime             @default(now())
+  updatedAt  DateTime             @updatedAt
+
+  @@unique([externalId, teamId])
+  @@index([teamId, gameDate])
+  @@index([status, updatedAt])
+}
+
+model PregamePreview {
+  id         String               @id @default(cuid())
+  date       String
+  teamId     String
+  gameId     String
+  opponentTeamId String
+  gameTime   String
+  stadium    String?
+  status     PregamePreviewStatus @default(PENDING)
+  title      String?
+  bodyLines  Json?
+  context    Json?
+  error      String?
+  generatedAt DateTime?
+  createdAt  DateTime             @default(now())
+  updatedAt  DateTime             @updatedAt
+
+  @@unique([date, teamId])
+  @@index([date, status])
+  @@index([teamId, date])
 }

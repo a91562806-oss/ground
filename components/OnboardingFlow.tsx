@@ -22,7 +22,10 @@ const DEFAULT_TOPICS: PushTopics = {
   pitcher: true,
   preGame: true,
   postGame: true,
+  highlight: true,
   score: true,
+  livePitcherChange: true,
+  liveStrikeout: true,
 };
 const NOTIF_PREFS_STORAGE_KEY = "ground-notif-prefs";
 
@@ -112,6 +115,19 @@ export default function OnboardingFlow({ onComplete }: Props) {
   const [installGuide, setInstallGuide] = useState<"none" | "ios" | "android">("none");
   const { isStandalone, os, canPromptInstall, promptInstall } = usePwaInstallGate();
 
+  async function fetchVapidKey(): Promise<string | null> {
+    try {
+      const res = await fetch("/api/notifications/subscribe", { cache: "no-store" });
+      if (!res.ok) return null;
+      const data = (await res.json()) as { vapidPublicKey?: unknown };
+      return typeof data.vapidPublicKey === "string" && data.vapidPublicKey.trim().length > 0
+        ? data.vapidPublicKey
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
   const selectedTeam = useMemo(
     () => (selectedTeamId ? TEAMS.find((t) => t.id === selectedTeamId) ?? null : null),
     [selectedTeamId]
@@ -122,14 +138,9 @@ export default function OnboardingFlow({ onComplete }: Props) {
   );
 
   useEffect(() => {
-    void fetch("/api/notifications/subscribe")
-      .then((r) => r.json())
-      .then((d) => {
-        if (typeof d?.vapidPublicKey === "string") setVapidPublicKey(d.vapidPublicKey);
-      })
-      .catch(() => {
-        /* ignore */
-      });
+    void fetchVapidKey().then((key) => {
+      if (key) setVapidPublicKey(key);
+    });
   }, []);
 
   useEffect(() => {
@@ -197,17 +208,19 @@ export default function OnboardingFlow({ onComplete }: Props) {
         setErrorMsg("푸시 알림 권한을 허용해야 시작할 수 있어요.");
         return;
       }
-      if (!vapidPublicKey) {
-        setErrorMsg("알림 설정 정보를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.");
+      const resolvedVapidKey = vapidPublicKey ?? (await fetchVapidKey());
+      if (!resolvedVapidKey) {
+        setErrorMsg("알림 설정 정보를 가져오지 못했어요. 잠시 후 다시 시도해 주세요.");
         return;
       }
+      if (!vapidPublicKey) setVapidPublicKey(resolvedVapidKey);
 
       const reg = await registerServiceWorker();
       if (!reg) {
         setErrorMsg("서비스 워커를 지원하지 않는 브라우저예요.");
         return;
       }
-      const sub = await subscribeBrowserPush(reg, vapidPublicKey);
+      const sub = await subscribeBrowserPush(reg, resolvedVapidKey);
       const uid = getOrCreateNotifyUserId();
       await persistSubscription(sub, DEFAULT_TOPICS, uid);
       localStorage.setItem(NOTIF_PREFS_STORAGE_KEY, JSON.stringify(DEFAULT_TOPICS));

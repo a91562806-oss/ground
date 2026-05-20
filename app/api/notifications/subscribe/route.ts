@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureNotifyUser, resolveNotifyUserId } from "@/lib/notifyIdentity";
 import { getVapidPublicKey } from "@/lib/webPushServer";
+import { resolveServerAppEnv } from "@/lib/appEnv";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,7 +20,10 @@ type SubscribeBody = {
     pitcher?: boolean;
     preGame?: boolean;
     postGame?: boolean;
+    highlight?: boolean;
     score?: boolean;
+    livePitcherChange?: boolean;
+    liveStrikeout?: boolean;
   };
   favoriteTeam?: string;
 };
@@ -28,15 +32,25 @@ type PushTopicFlags = {
   pitcher: boolean;
   preGame: boolean;
   postGame: boolean;
+  highlight: boolean;
   score: boolean;
+  livePitcherChange: boolean;
+  liveStrikeout: boolean;
+  appEnv: "production" | "alpha" | "development";
 };
 
 function normalizeTopics(input: SubscribeBody["topics"]): PushTopicFlags {
+  const toEnabledByDefault = (value: boolean | undefined) => (value === false ? false : true);
+  const appEnv = resolveServerAppEnv();
   return {
-    pitcher: Boolean(input?.pitcher),
-    preGame: Boolean(input?.preGame),
-    postGame: Boolean(input?.postGame),
-    score: Boolean(input?.score),
+    pitcher: toEnabledByDefault(input?.pitcher),
+    preGame: toEnabledByDefault(input?.preGame),
+    postGame: toEnabledByDefault(input?.postGame),
+    highlight: toEnabledByDefault(input?.highlight),
+    score: toEnabledByDefault(input?.score),
+    livePitcherChange: toEnabledByDefault(input?.livePitcherChange),
+    liveStrikeout: toEnabledByDefault(input?.liveStrikeout),
+    appEnv,
   };
 }
 

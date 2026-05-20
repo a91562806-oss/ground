@@ -7,7 +7,10 @@ export type PushTopics = {
   pitcher: boolean;
   preGame: boolean;
   postGame: boolean;
+  highlight: boolean;
   score: boolean;
+  livePitcherChange: boolean;
+  liveStrikeout: boolean;
 };
 
 export function getOrCreateNotifyUserId(): string {

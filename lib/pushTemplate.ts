@@ -44,7 +44,8 @@ export function buildBiasedScoreCopy(input: {
     const byState: Record<PushPulseState, string[]> = {
       lead: [
         `미쳤다 ㅋㅋ ${scoreText}. 이대로 박살내자.`,
-        `${scoreText} 리드 유지! 상대 멘탈 흔들린다.`,
+        `${scoreText} 리드 지켰다. 지금부터 쐐기 박자.`,
+        `${scoreText} 분위기 넘어왔다. 한 점 더 달아나자.`,
       ],
       trail: [
         `${scoreText}! 한 점 따라붙었다, 분위기 바뀐다.`,
