@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
 import { findTeam } from "@/lib/teams";
 import { isAlphaServerEnv } from "@/lib/appEnv";
+import { sendWebPush } from "@/lib/webPushServer";
 import { authorizeCron, sendTeamTopicNotification, type TopicKey } from "@/services/notificationService";
 
 export const runtime = "nodejs";
@@ -85,6 +87,26 @@ export async function GET(req: Request) {
   const copy = defaultCopy(teamId, topic);
   const title = (url.searchParams.get("title") ?? "").trim() || copy.title;
   const body = (url.searchParams.get("body") ?? "").trim() || copy.body;
+
+  // `userId=` 파라미터가 있으면 그 1명에게만 직접 발송 (테스트 오발 방지).
+  // 없으면 팀 전체 alpha 구독자에게 sendTeamTopicNotification 경유.
+  const targetUserId = (url.searchParams.get("userId") ?? "").trim();
+  if (targetUserId) {
+    const sub = await prisma.pushSubscription.findFirst({
+      where: { userId: targetUserId, enabled: true },
+      orderBy: { updatedAt: "desc" },
+      select: { endpoint: true, p256dh: true, auth: true },
+    });
+    if (!sub) {
+      return NextResponse.json({ ok: false, error: "subscription_not_found", userId: targetUserId });
+    }
+    const push = await sendWebPush(
+      { endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth },
+      { title, body, url: "/today", teamId },
+      { favoriteTeam: teamId, origin: url.origin }
+    );
+    return NextResponse.json({ ok: push.ok, userId: targetUserId, teamId, topic, sent: push.ok ? 1 : 0 });
+  }
 
   const result = await sendTeamTopicNotification({
     teamId,
