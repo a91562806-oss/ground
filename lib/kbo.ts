@@ -147,6 +147,9 @@ type NaverScheduleGame = {
   awayTeamCode?: string;
   stadium?: string;
   statusCode?: string;
+  /** 네이버는 취소 경기도 statusCode:"BEFORE" 유지하면서 cancel:true 병행 */
+  cancel?: boolean;
+  statusInfo?: string;
   homeStarterName?: string;
   awayStarterName?: string;
   homeCurrentPitcherName?: string;
@@ -159,9 +162,20 @@ type NaverScheduleGame = {
   savePitcherName?: string;
 };
 
+function resolveGameStatus(raw: NaverScheduleGame): LiveStatus {
+  const base = normalizeStatus(raw.statusCode);
+  if (base === "CANCEL") return "CANCEL";
+  if (raw.cancel === true) return "CANCEL";
+  const info = (raw.statusInfo ?? "").toLowerCase();
+  if (info.includes("취소") || info.includes("cancel") || info.includes("postponed")) return "CANCEL";
+  return base;
+}
+
 function inferCancelReason(raw: NaverScheduleGame): "RAIN" | "OTHER" | null {
-  const status = normalizeStatus(raw.statusCode);
+  const status = resolveGameStatus(raw);
   if (status !== "CANCEL") return null;
+  const info = (raw.statusInfo ?? "").toLowerCase();
+  if (info.includes("우천") || info.includes("rain")) return "RAIN";
   const text = JSON.stringify(raw).toLowerCase();
   if (text.includes("우천") || text.includes("rain")) return "RAIN";
   return "OTHER";
@@ -172,7 +186,7 @@ function adaptNaverGame(raw: NaverScheduleGame, fallbackDate: string): LiveGame 
   const awayId = NAVER_TEAM_MAP[(raw.awayTeamCode ?? "").toUpperCase()];
   if (!homeId || !awayId) return null;
 
-  const status = normalizeStatus(raw.statusCode);
+  const status = resolveGameStatus(raw);
   const dateRaw = raw.gameDate ?? "";
   const date =
     dateRaw.length === 8
