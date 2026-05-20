@@ -1,27 +1,22 @@
 {
   "crons": [
     {
-      "comment": "프리뷰: 주중+토 18:30 경기 → KST 17:30 = UTC 08:30",
       "path": "/api/cron/preview",
       "schedule": "30 8 * * 2-6"
     },
     {
-      "comment": "프리뷰: 주말 14:00 경기 → KST 13:00 = UTC 04:00",
       "path": "/api/cron/preview",
       "schedule": "0 4 * * 0,6"
     },
     {
-      "comment": "경기시작: 주중+토 18:30 경기 → KST 18:15 = UTC 09:15",
       "path": "/api/cron/game-start",
       "schedule": "15 9 * * 2-6"
     },
     {
-      "comment": "경기시작: 주말 14:00 경기 → KST 13:45 = UTC 04:45",
       "path": "/api/cron/game-start",
       "schedule": "45 4 * * 0,6"
     },
     {
-      "comment": "포스트게임 안전망: KST 01:00 = UTC 16:00 (경기 다 끝난 후)",
       "path": "/api/cron/postgame",
       "schedule": "0 16 * * *"
     }
