@@ -12,11 +12,23 @@ import { prisma } from "@/lib/prisma";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function isPregamePreviewWindow(date: string, now = new Date()): boolean {
-  const start = Date.parse(`${date}T17:30:00+09:00`);
+function isPregamePreviewWindow(gameTime: string | undefined, date: string, now = new Date()): boolean {
+  // gameTime이 있으면 경기 시작 -90분 ~ +0분 구간에만 노출
+  // (경기 시작 후엔 status가 LIVE/RESULT로 바뀌어 이 함수 자체가 호출되지 않음)
+  if (gameTime) {
+    const [hh, mm] = gameTime.split(":").map(Number);
+    if (Number.isFinite(hh) && Number.isFinite(mm)) {
+      const gameMs = Date.parse(`${date}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00+09:00`);
+      if (Number.isFinite(gameMs)) {
+        const minsUntil = (gameMs - now.getTime()) / 60_000;
+        return minsUntil >= -10 && minsUntil <= 90;
+      }
+    }
+  }
+  // fallback: 17:00~18:30 KST (주중 기본값)
+  const start = Date.parse(`${date}T17:00:00+09:00`);
   const end = Date.parse(`${date}T18:30:00+09:00`);
-  const ms = now.getTime();
-  return Number.isFinite(start) && Number.isFinite(end) && ms >= start && ms < end;
+  return now.getTime() >= start && now.getTime() < end;
 }
 
 function postGameVisibleUntilKst(gameDate: Date): Date {
@@ -168,7 +180,7 @@ export async function GET(req: Request) {
           lines: Array.isArray(row.bodyLines)
             ? row.bodyLines.filter((line): line is string => typeof line === "string")
             : [],
-          active: isPregamePreviewWindow(date),
+          active: row.status === "READY" && isPregamePreviewWindow(teamGame.time, date),
           generatedAt: row.generatedAt ? row.generatedAt.toISOString() : null,
         };
       }
