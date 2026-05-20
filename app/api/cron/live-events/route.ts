@@ -23,6 +23,35 @@ type RelayInfo = {
   eventKey: string;
 };
 
+type RelayEntry = {
+  text: string;
+  seqNo?: number | string;
+  inning?: number;
+  inningSub?: string | number;
+};
+
+/**
+ * relay JSON 에서 중계 텍스트 배열을 추출.
+ * Naver API 응답 구조가 버전마다 다르므로 여러 경로를 시도.
+ */
+function extractRelayEntries(json: Record<string, unknown>): RelayEntry[] {
+  // 가능한 배열 경로들
+  const candidates = [
+    json["relayTexts"],
+    (json["result"] as Record<string, unknown> | undefined)?.["relayTexts"],
+    (json["relay"]  as Record<string, unknown> | undefined)?.["relayTexts"],
+    (json["result"] as Record<string, unknown> | undefined)
+      ?.["relay"] &&
+      ((json["result"] as Record<string, unknown>)["relay"] as Record<string, unknown>)?.["relayTexts"],
+    json["texts"],
+    (json["result"] as Record<string, unknown> | undefined)?.["texts"],
+  ];
+  for (const c of candidates) {
+    if (Array.isArray(c) && c.length > 0) return c as RelayEntry[];
+  }
+  return [];
+}
+
 async function fetchRelayInfo(gameId: string): Promise<RelayInfo | null> {
   const endpoints = [
     `${NAVER_BASE}/schedule/games/${gameId}/relay`,
@@ -40,23 +69,66 @@ async function fetchRelayInfo(gameId: string): Promise<RelayInfo | null> {
       });
       if (!res.ok) continue;
       const json = (await res.json()) as Record<string, unknown>;
-      const text = JSON.stringify(json);
-      if (!text) continue;
 
+      const entries = extractRelayEntries(json);
+
+      if (entries.length > 0) {
+        // ★ 핵심 수정: 전체 히스토리 대신 최근 5개 엔트리만 검사
+        // 크론이 5분마다 돌므로 최근 5개면 충분히 커버됨
+        const recentEntries = entries.slice(-5);
+        const recentText = recentEntries.map((e) => e.text ?? "").join(" ");
+
+        const eventKinds: Array<"pitcherChange" | "strikeout"> = [];
+        if (/투수\s*교체|투수교체/.test(recentText)) eventKinds.push("pitcherChange");
+        if (/삼진|탈삼진/.test(recentText)) eventKinds.push("strikeout");
+        if (eventKinds.length === 0) return null;
+
+        // 이벤트 키: 마지막 엔트리의 seqNo + 텍스트 앞 60자 (중복 방지)
+        const lastEntry = recentEntries[recentEntries.length - 1];
+        const seqId = lastEntry.seqNo != null ? String(lastEntry.seqNo) : recentText.slice(0, 60);
+        const eventKey = `seq:${seqId}`;
+
+        // 이닝 초/말은 최신 엔트리 기준
+        const battingSide = resolveInningSideFromEntries(recentEntries, json);
+
+        return { eventKinds, battingSide, eventKey };
+      }
+
+      // entries 배열 추출 실패 시 — 전체 JSON fallback (legacy)
+      // 이 경우 dedup key를 충분히 촘촘하게 잡아 과거 중복 방지
+      const fullText = JSON.stringify(json);
       const eventKinds: Array<"pitcherChange" | "strikeout"> = [];
-      if (/투수\s*교체|투수교체/.test(text)) eventKinds.push("pitcherChange");
-      if (/삼진|탈삼진/.test(text)) eventKinds.push("strikeout");
-      if (eventKinds.length === 0) return null;
 
-      // inningSub 파싱 — Naver 중계 JSON 여러 필드명 대응
+      // 최근 중계 텍스트만 추출 시도 (last 200 chars of json may include recent text)
+      // 이 경로에선 false positive 가능성이 있으므로 이벤트 감지를 건너뜀
+      if (eventKinds.length === 0) {
+        // entries 파싱 실패 + 배열 없음 = 이 endpoint는 포기
+        continue;
+      }
+
       const battingSide = resolveInningSide(json);
-
-      return { eventKinds, battingSide, eventKey: text.slice(0, 160) };
+      return { eventKinds, battingSide, eventKey: fullText.slice(0, 160) };
     } catch {
       // ignore, try next endpoint
     }
   }
   return null;
+}
+
+/**
+ * 최신 릴레이 엔트리 배열과 루트 JSON 에서 이닝 초/말을 추출.
+ */
+function resolveInningSideFromEntries(
+  recentEntries: RelayEntry[],
+  rootJson: Record<string, unknown>,
+): "home" | "away" | null {
+  // 1) 최신 엔트리의 inningSub 우선
+  for (const entry of [...recentEntries].reverse()) {
+    if (entry.inningSub === "1" || entry.inningSub === 1) return "away";
+    if (entry.inningSub === "2" || entry.inningSub === 2) return "home";
+  }
+  // 2) 루트 JSON fallback
+  return resolveInningSide(rootJson);
 }
 
 /**
