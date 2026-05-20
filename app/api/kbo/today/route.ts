@@ -20,7 +20,12 @@ function isPregamePreviewWindow(date: string, now = new Date()): boolean {
 }
 
 function postGameVisibleUntilKst(gameDate: Date): Date {
-  const dateKst = gameDate.toISOString().slice(0, 10);
+  // gameDate는 KST 자정(예: 2026-05-20T00:00:00+09:00 = UTC 2026-05-19T15:00:00Z)으로 저장됨.
+  // toISOString()은 UTC 기준이므로 날짜가 하루 밀려 "2026-05-19"가 됨.
+  // KST 기준 날짜를 구하려면 +9h 오프셋을 더해야 한다.
+  const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
+  const dateKst = new Date(gameDate.getTime() + KST_OFFSET_MS).toISOString().slice(0, 10);
+  // 해당 날짜 KST 정오 + 24h = 익일 정오까지 노출
   const visibleUntilMs = Date.parse(`${dateKst}T12:00:00+09:00`) + 24 * 60 * 60 * 1000;
   return new Date(visibleUntilMs);
 }
