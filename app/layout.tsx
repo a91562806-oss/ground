@@ -3,6 +3,7 @@ import "./globals.css";
 import BottomNav from "@/components/BottomNav";
 import OnboardingGate from "@/components/OnboardingGate";
 import EnvironmentBadge from "@/components/EnvironmentBadge";
+import PageShell from "@/components/PageShell";
 
 export const metadata: Metadata = {
   title: "내 팀을 위한 극단적 편파 알림 GROUND",
@@ -68,7 +69,7 @@ export default function RootLayout({
           >
             <EnvironmentBadge />
             <main className="flex min-h-0 flex-1 flex-col overflow-hidden pb-24">
-              {children}
+              <PageShell>{children}</PageShell>
             </main>
             <BottomNav />
           </div>

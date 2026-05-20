@@ -39,9 +39,24 @@
     -webkit-tap-highlight-color: transparent;
   }
 
-  /* Body scroll lock 위에서 실제 앱 인터랙션은 다시 허용 */
-  .app-shell,
+  /*
+    Body 는 scroll lock(`touch-action: none`) 이지만,
+    app-shell 내부는 세로 스크롤(+ PageShell 의 가로 드래그 라우팅)만 허용한다.
+    pan-y 로 두면 모바일 Safari/Chrome 이 좌우 스와이프 제스처를 native scroll 로
+    처리하지 않고 framer-motion 의 drag 핸들러로 위임한다.
+  */
+  .app-shell {
+    touch-action: pan-y;
+  }
   .app-shell * {
+    touch-action: pan-y;
+  }
+
+  /* 명시적으로 가로 스크롤이 필요한 영역(예: 칩 행, 가로 캐러셀) 에선 이 클래스로 풀어준다. */
+  .touch-pan-all {
+    touch-action: pan-x pan-y;
+  }
+  .touch-auto {
     touch-action: auto;
   }
 
