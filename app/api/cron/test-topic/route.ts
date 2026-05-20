@@ -80,13 +80,7 @@ export async function GET(req: Request) {
   }
 
   const teamId = (url.searchParams.get("teamId") ?? "").trim().toLowerCase();
-  const topic = parseTopic(url.searchParams.get("topic"));
   if (!teamId) return NextResponse.json({ ok: false, error: "teamId_required" }, { status: 400 });
-  if (!topic) return NextResponse.json({ ok: false, error: "invalid_topic" }, { status: 400 });
-
-  const copy = defaultCopy(teamId, topic);
-  const title = (url.searchParams.get("title") ?? "").trim() || copy.title;
-  const body = (url.searchParams.get("body") ?? "").trim() || copy.body;
 
   // `listUsers=1` 이면 alpha 구독자 userId 목록만 반환 (발송 없음).
   if (url.searchParams.get("listUsers") === "1") {
@@ -104,6 +98,13 @@ export async function GET(req: Request) {
       users: alpha.map((s) => ({ userId: s.userId, updatedAt: s.updatedAt })),
     });
   }
+
+  const topic = parseTopic(url.searchParams.get("topic"));
+  if (!topic) return NextResponse.json({ ok: false, error: "invalid_topic" }, { status: 400 });
+
+  const copy = defaultCopy(teamId, topic);
+  const title = (url.searchParams.get("title") ?? "").trim() || copy.title;
+  const body = (url.searchParams.get("body") ?? "").trim() || copy.body;
 
   // `userId=` 파라미터가 있으면 그 1명에게만 직접 발송 (테스트 오발 방지).
   // 없으면 팀 전체 alpha 구독자에게 sendTeamTopicNotification 경유.
