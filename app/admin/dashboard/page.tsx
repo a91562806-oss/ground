@@ -2,6 +2,8 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { findTeam, TEAMS } from "@/lib/teams";
 import PendingNotificationsSection from "./PendingNotificationsSection";
+import PushSenderForm from "./PushSenderForm";
+import MarketingPushStats from "./MarketingPushStats";
 
 export const dynamic = "force-dynamic";
 
@@ -73,7 +75,7 @@ export default async function AdminDashboardPage({ searchParams }: Props) {
 
   const todayStart = startOfTodayKst();
 
-  const [totalUsers, teamRows, todaysTriggers, todayNotifications, pendingNotifications] = await Promise.all([
+  const [totalUsers, teamRows, todaysTriggers, todayNotifications, pendingNotifications, recentMarketingPushes] = await Promise.all([
     db.user.count({
       where: {
         pushSubscriptions: {
@@ -136,6 +138,20 @@ export default async function AdminDashboardPage({ searchParams }: Props) {
         createdAt: true,
       },
     }),
+    db.marketingPush.findMany({
+      orderBy: { sentAt: "desc" },
+      take: 30,
+      select: {
+        id: true,
+        title: true,
+        body: true,
+        targetTeamId: true,
+        sentCount: true,
+        clickCount: true,
+        testOnly: true,
+        sentAt: true,
+      },
+    }),
   ]);
 
   const maxCount = teamRows[0]?._count._all ?? 1;
@@ -189,6 +205,19 @@ export default async function AdminDashboardPage({ searchParams }: Props) {
     const teamId = row.user.favoriteTeam ?? "unknown";
     group.teamCount.set(teamId, (group.teamCount.get(teamId) ?? 0) + 1);
   }
+
+  const marketingPushRows = recentMarketingPushes.map((p: any) => {
+    const ctr = p.sentCount > 0 ? ((p.clickCount / p.sentCount) * 100).toFixed(1) : "0.0";
+    const targetLabel = p.targetTeamId
+      ? (TEAMS.find((t) => t.id === p.targetTeamId)?.name ?? p.targetTeamId)
+      : "전체 유저";
+    return {
+      ...p,
+      targetLabel,
+      ctr,
+      sentAt: formatDateTimeKst(p.sentAt),
+    };
+  });
 
   const todayAlertRuns = Array.from(grouped.values())
     .map((group) => {
@@ -286,6 +315,13 @@ export default async function AdminDashboardPage({ searchParams }: Props) {
             </ul>
           )}
         </div>
+
+        <PushSenderForm
+          adminKey={key!}
+          teams={TEAMS.map((t) => ({ id: t.id, name: t.name, short: t.short }))}
+        />
+
+        <MarketingPushStats rows={marketingPushRows} />
 
         <PendingNotificationsSection
           initialItems={pendingNotifications.map((n: any) => ({
