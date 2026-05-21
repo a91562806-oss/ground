@@ -60,7 +60,7 @@ export default function SchedulePageClient({
   /** 서버에서 SSR 로 받아온 초기 번들 — 첫 paint 부터 라이브 데이터 노출. */
   initial: ScheduleBundle;
 }) {
-  const rootRef = useRef<HTMLElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const sectionRefs = useRef<Array<HTMLDivElement | null>>([]);
   const currentSectionRef = useRef(0);
   const scrollLockedRef = useRef(false);
@@ -168,26 +168,18 @@ export default function SchedulePageClient({
     [sections.length, scrollToSection, bumpHaptic]
   );
 
-  // 초기 mount 시 TODAY 섹션으로 점프. SSR 덕분에 초기 콘텐츠가 이미 라이브이므로
-  // 한 번의 effect 호출로 정확한 위치에 anchor.
+  // 초기 mount 시 TODAY 섹션으로 점프.
   useEffect(() => {
-    const root =
-      rootRef.current ??
-      (document.querySelector("main") instanceof HTMLElement
-        ? (document.querySelector("main") as HTMLElement)
-        : null);
-    if (root && !rootRef.current) rootRef.current = root;
+    const root = rootRef.current;
     if (!root) return;
     scrollToSection(todayIndex, "auto");
   }, [todayIndex, scrollToSection]);
 
-  // 폴링으로 새 데이터가 도착했을 때, 사용자가 아직 스크롤하지 않은 첫 갱신 한정으로만
-  // 보정 스크롤 (initial 과 동일한 데이터면 영향 없음).
+  // 폴링으로 새 데이터가 도착했을 때 첫 갱신 한정으로만 보정 스크롤.
   useEffect(() => {
     if (didLiveScrollRef.current) return;
     if (!live) return;
     if (live === initial) {
-      // 첫 SSR 그대로면 폴링 갱신 아님 → 스킵
       didLiveScrollRef.current = true;
       return;
     }
@@ -200,12 +192,7 @@ export default function SchedulePageClient({
 
   // 한 번 스크롤(휠/스와이프)할 때 날짜를 하나씩 넘기는 스냅 UX.
   useEffect(() => {
-    const root =
-      rootRef.current ??
-      (document.querySelector("main") instanceof HTMLElement
-        ? (document.querySelector("main") as HTMLElement)
-        : null);
-    if (root && !rootRef.current) rootRef.current = root;
+    const root = rootRef.current;
     if (!root) return;
 
     let touchStartX = 0;
@@ -261,33 +248,35 @@ export default function SchedulePageClient({
   }, [stepSection]);
 
   return (
-    <section className="px-0 pb-10">
-      <header className="px-7 pt-7">
+    <div ref={rootRef} className="flex-1 min-h-0 overflow-y-auto">
+      <section className="px-0 pb-10">
+        <header className="px-7 pt-7">
+          <p
+            className="text-[10px] uppercase tracking-[0.32em] text-white/45"
+            style={{ fontWeight: 600 }}
+          >
+            Schedule
+          </p>
+        </header>
+
+        {sections.map((sec, i) => (
+          <DaySection
+            key={`${sec.badge}-${sec.date}-${i}`}
+            section={sec}
+            sectionRef={(el) => {
+              sectionRefs.current[i] = el;
+            }}
+          />
+        ))}
+
         <p
-          className="text-[10px] uppercase tracking-[0.32em] text-white/45"
+          className="px-7 pt-12 text-[10px] uppercase tracking-[0.32em] text-white/30"
           style={{ fontWeight: 600 }}
         >
-          Schedule
+          End of feed
         </p>
-      </header>
-
-      {sections.map((sec, i) => (
-        <DaySection
-          key={`${sec.badge}-${sec.date}-${i}`}
-          section={sec}
-          sectionRef={(el) => {
-            sectionRefs.current[i] = el;
-          }}
-        />
-      ))}
-
-      <p
-        className="px-7 pt-12 text-[10px] uppercase tracking-[0.32em] text-white/30"
-        style={{ fontWeight: 600 }}
-      >
-        End of feed
-      </p>
-    </section>
+      </section>
+    </div>
   );
 }
 
@@ -386,184 +375,110 @@ function GameRow({
   const venue = venueDisplayLines(game.stadium);
 
   return (
-    <li className="group flex items-start gap-5 rounded-2xl border border-white/10 bg-black/40 p-5 backdrop-blur-md backdrop-saturate-150 shadow-[0_8px_22px_rgba(0,0,0,0.35)]">
-      <div className="w-24 shrink-0" title={game.stadium || undefined}>
+    <li className="rounded-2xl border border-white/10 bg-black/40 p-4 backdrop-blur-md backdrop-saturate-150 shadow-[0_8px_22px_rgba(0,0,0,0.35)]">
+      {/* ── 메인 행: 시간 | 원정팀 | 스코어/vs | 홈팀 | 뱃지 ── */}
+      <div className="flex items-baseline gap-2">
+        {/* 시간 */}
         <span
-          className={`block tabular-nums text-[20px] leading-none tracking-tight drop-shadow-md ${text}`}
-          style={{
-            fontWeight: 800,
-            textShadow: "0 1px 6px rgba(0,0,0,0.45)",
-          }}
+          className={`w-[52px] shrink-0 tabular-nums text-[17px] leading-none tracking-tight ${text}`}
+          style={{ fontWeight: 800 }}
         >
           {game.time}
         </span>
-      </div>
 
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline justify-between gap-3">
-          <div className="min-w-0 flex flex-1 flex-nowrap items-baseline gap-2 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            <span
-              className={`shrink-0 whitespace-nowrap text-[18px] leading-none tracking-tight drop-shadow-md ${awayTeamColor}`}
-              style={{
-                fontWeight: 900,
-                textShadow: "0 1px 6px rgba(0,0,0,0.45)",
-              }}
-            >
-              {away.short}
-            </span>
+        {/* 원정팀 — flex-1 + text-right 로 남은 공간 절반 */}
+        <span
+          className={`min-w-0 flex-1 truncate text-right text-[17px] leading-none tracking-tight drop-shadow-md ${awayTeamColor}`}
+          style={{ fontWeight: 900, textShadow: "0 1px 6px rgba(0,0,0,0.45)" }}
+        >
+          {away.short}
+        </span>
 
-            {result ? (
-              <>
-                <span
-                  className={`shrink-0 tabular-nums text-[16px] leading-none tracking-tight drop-shadow-md ${
-                    awayWon ? "text-white" : "text-white/55"
-                  }`}
-                  style={{
-                    fontWeight: 900,
-                    textShadow: "0 1px 6px rgba(0,0,0,0.45)",
-                  }}
-                >
-                  {result.awayScore}
-                </span>
-                <span
-                  className="shrink-0 text-[10px] tracking-[0.3em] text-white/45"
-                  style={{ fontWeight: 700 }}
-                >
-                  {draw ? "D" : ":"}
-                </span>
-                <span
-                  className={`shrink-0 tabular-nums text-[16px] leading-none tracking-tight drop-shadow-md ${
-                    homeWon ? "text-white" : "text-white/55"
-                  }`}
-                  style={{
-                    fontWeight: 900,
-                    textShadow: "0 1px 6px rgba(0,0,0,0.45)",
-                  }}
-                >
-                  {result.homeScore}
-                </span>
-              </>
-            ) : (
-              <span
-                className="shrink-0 text-[10px] italic tracking-[0.3em] text-white/50"
-                style={{ fontWeight: 400 }}
-              >
-                vs
-              </span>
-            )}
-
-            <span
-              className={`shrink-0 whitespace-nowrap text-[18px] leading-none tracking-tight drop-shadow-md ${homeTeamColor}`}
-              style={{
-                fontWeight: 900,
-                textShadow: "0 1px 6px rgba(0,0,0,0.45)",
-              }}
-            >
-              {home.short}
-            </span>
-          </div>
-
-          {result && (
-            <div className="flex shrink-0 flex-col items-end gap-1.5 self-baseline">
-              <ResultBadge
-                winnerSide={awayWon ? "away" : homeWon ? "home" : "draw"}
-              />
-              <HighlightLink url={game.highlightUrl} muted={muted} />
-            </div>
-          )}
-        </div>
-
-        {!(badge === "PAST" && result) && (
-          <p
-            className={`mt-1.5 truncate text-[12px] leading-tight tracking-wide ${subtext}`}
+        {/* 스코어 or vs */}
+        {result ? (
+          <span
+            className="shrink-0 min-w-[56px] text-center tabular-nums text-[15px] leading-none tracking-tight"
+            style={{ fontWeight: 800 }}
+          >
+            <span className={awayWon ? "text-white" : "text-white/50"}>{result.awayScore}</span>
+            <span className="mx-1 text-white/40">{draw ? "D" : ":"}</span>
+            <span className={homeWon ? "text-white" : "text-white/50"}>{result.homeScore}</span>
+          </span>
+        ) : (
+          <span
+            className="shrink-0 min-w-[32px] text-center text-[10px] italic text-white/45"
             style={{ fontWeight: 400 }}
           >
-            {result ? (
-              draw ? (
-                <>
-                  무승부 ·{" "}
-                  {badge === "TODAY"
-                    ? `${starterLabel(game.awayPitcher)} vs ${starterLabel(game.homePitcher)}`
-                    : `선발 ${game.awayPitcher} vs ${game.homePitcher}`}
-                </>
-              ) : (
-                <>
-                  {result.winningPitcher ?? "—"}
-                  <span className="mx-1.5 text-white/20">·</span>
-                  {result.losingPitcher ?? "—"}
-                </>
-              )
-            ) : (
-              <>
-                {badge === "TODAY" ? null : (
-                  <>
-                    <span className="text-white/40" style={{ fontWeight: 600 }}>
-                      선발
-                    </span>{" "}
-                  </>
-                )}
-                {starterLabel(game.awayPitcher)}
-                <span className="mx-1.5 text-white/20">vs</span>
-                {starterLabel(game.homePitcher)}
-              </>
-            )}
-          </p>
+            vs
+          </span>
         )}
 
-        {venue.primary ? (
-          <div
-            className={`mt-2.5 space-y-0.5 ${muted ? "text-white/42" : "text-white/55"}`}
-          >
-            <p
-              className="text-[11px] font-semibold leading-snug tracking-[0.08em]"
-              style={{ fontWeight: 600 }}
+        {/* 홈팀 — flex-1 + text-left */}
+        <span
+          className={`min-w-0 flex-1 truncate text-left text-[17px] leading-none tracking-tight drop-shadow-md ${homeTeamColor}`}
+          style={{ fontWeight: 900, textShadow: "0 1px 6px rgba(0,0,0,0.45)" }}
+        >
+          {home.short}
+        </span>
+
+        {/* 상태 뱃지 */}
+        <div className="shrink-0 flex flex-col items-end gap-1">
+          {result && (
+            <ResultBadge winnerSide={awayWon ? "away" : homeWon ? "home" : "draw"} />
+          )}
+          {liveStatus === "LIVE" && !result && (
+            <span
+              className="inline-flex items-center gap-1 rounded-full px-2 py-[2px] text-[8.5px] uppercase"
+              style={{ fontWeight: 800, letterSpacing: "0.2em", color: "#ff4d4d", background: "rgba(255,77,77,0.12)" }}
             >
-              {venue.primary}
-            </p>
-            {venue.secondary ? (
-              <p
-                className={`text-[10px] font-normal leading-snug tracking-wide normal-case ${
-                  muted ? "text-white/30" : "text-white/38"
-                }`}
-                style={{ fontWeight: 400 }}
-              >
-                {venue.secondary}
-              </p>
-            ) : null}
-          </div>
-        ) : null}
+              <span className="inline-block h-1 w-1 animate-pulse rounded-full" style={{ backgroundColor: "#ff4d4d" }} />
+              LIVE
+            </span>
+          )}
+          {liveStatus === "CANCEL" && !result && (
+            <span
+              className="rounded-full px-2 py-[2px] text-[8.5px] uppercase"
+              style={{ fontWeight: 800, letterSpacing: "0.2em", color: "rgba(255,255,255,0.4)", background: "rgba(255,255,255,0.06)" }}
+            >
+              CXL
+            </span>
+          )}
+        </div>
       </div>
 
-      {liveStatus === "LIVE" && !result && (
-        <span
-          className="ml-2 inline-flex items-center gap-1 self-start rounded-full px-2 py-[2px] text-[8.5px] uppercase"
-          style={{
-            fontWeight: 800,
-            letterSpacing: "0.2em",
-            color: "#ff4d4d",
-            background: "rgba(255,77,77,0.12)",
-          }}
+      {/* ── 서브 행: 투수 정보 ── */}
+      {!(badge === "PAST" && result) && (
+        <p
+          className={`mt-2 truncate text-[11px] leading-tight tracking-wide ${subtext}`}
+          style={{ fontWeight: 400 }}
         >
-          <span
-            className="inline-block h-1 w-1 animate-pulse rounded-full"
-            style={{ backgroundColor: "#ff4d4d" }}
-          />
-          LIVE
-        </span>
+          {result ? (
+            draw ? (
+              <>무승부 · {starterLabel(game.awayPitcher)} vs {starterLabel(game.homePitcher)}</>
+            ) : (
+              <>{result.winningPitcher ?? "—"}<span className="mx-1.5 text-white/20">·</span>{result.losingPitcher ?? "—"}</>
+            )
+          ) : (
+            <>
+              {badge !== "TODAY" && <span className="text-white/40" style={{ fontWeight: 600 }}>선발 </span>}
+              {starterLabel(game.awayPitcher)}<span className="mx-1.5 text-white/20">vs</span>{starterLabel(game.homePitcher)}
+            </>
+          )}
+        </p>
       )}
-      {liveStatus === "CANCEL" && !result && (
-        <span
-          className="ml-2 self-start rounded-full px-2 py-[2px] text-[8.5px] uppercase"
-          style={{
-            fontWeight: 800,
-            letterSpacing: "0.2em",
-            color: "rgba(255,255,255,0.4)",
-            background: "rgba(255,255,255,0.06)",
-          }}
-        >
-          CXL
-        </span>
-      )}
+
+      {/* ── 구장 + HIGHLIGHT ── */}
+      <div className="mt-2 flex items-end justify-between gap-2">
+        {venue.primary ? (
+          <div className={`space-y-0.5 ${muted ? "text-white/38" : "text-white/52"}`}>
+            <p className="text-[11px] leading-snug tracking-[0.08em]" style={{ fontWeight: 600 }}>{venue.primary}</p>
+            {venue.secondary && (
+              <p className={`text-[10px] leading-snug tracking-wide ${muted ? "text-white/28" : "text-white/36"}`} style={{ fontWeight: 400 }}>{venue.secondary}</p>
+            )}
+          </div>
+        ) : <span />}
+        <HighlightLink url={game.highlightUrl} muted={muted} />
+      </div>
     </li>
   );
 }
