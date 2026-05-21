@@ -7,36 +7,34 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-function authorize(key: string | null): boolean {
-  const expected = process.env.ADMIN_SECRET ?? process.env.ADMIN_PASSWORD;
-  return !!expected && key === expected;
+function isAuthorized(req: Request): boolean {
+  const secret = process.env.ADMIN_SECRET ?? process.env.ADMIN_PASSWORD;
+  if (!secret) return false;
+  const auth = req.headers.get("authorization");
+  if (auth === `Bearer ${secret}`) return true;
+  return new URL(req.url).searchParams.get("key") === secret;
 }
 
 /**
  * POST /api/admin/send-push
- * Body: { adminKey, title, body, url, targetTeamId?, testOnly? }
- *
- * testOnly=true  → ADMIN_TEST_EMAIL 로 등록된 구독자에게만 발송
- * testOnly=false → targetTeamId 지정 시 해당 팀 팬 전체, null 이면 전체 유저
- *
- * 클릭 트래킹 URL 은 발송 시 /api/push/click?n=ID&u=ENCODED_URL 로 감쌉니다.
+ * Auth: Authorization: Bearer <ADMIN_SECRET>
+ * Body: { title, body, url, targetTeamId?, testOnly? }
  */
 export async function POST(req: Request) {
+  if (!isAuthorized(req)) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
   const body = await req.json().catch(() => null);
   if (!body) return NextResponse.json({ error: "invalid_body" }, { status: 400 });
 
-  const { adminKey, title, body: msgBody, url, targetTeamId = null, testOnly = false } = body as {
-    adminKey: string;
+  const { title, body: msgBody, url, targetTeamId = null, testOnly = false } = body as {
     title: string;
     body: string;
     url: string;
     targetTeamId?: string | null;
     testOnly?: boolean;
   };
-
-  if (!authorize(adminKey)) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
   if (!title?.trim() || !msgBody?.trim() || !url?.trim()) {
     return NextResponse.json({ error: "missing_fields" }, { status: 400 });
   }

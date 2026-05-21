@@ -27,9 +27,11 @@ export default function PushSenderForm({ adminKey, teams }: Props) {
     try {
       const res = await fetch("/api/admin/send-push", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${adminKey}`,
+        },
         body: JSON.stringify({
-          adminKey,
           title: title.trim(),
           body: body.trim(),
           url: url.trim() || "/today",
